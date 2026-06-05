@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # 录音 / 切片落盘目录
     audio_dir: str = "data/audio"
 
+    # faster-whisper 转写（模型首次调用自动下载权重）
+    whisper_model: str = "small"          # tiny | base | small | medium | large-v3
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_language: str = "en"          # 空字符串 = 自动检测
+
     # 服务监听地址
     app_host: str = "127.0.0.1"
     app_port: int = 8000

@@ -19,7 +19,7 @@
 
 ### P1 录音—评流水线 ★（~6h，护城河）
 - [x] 录音上传入口（`POST /recordings`，multipart WAV + {mode, sub_mode, scenario_case}）
-- [ ] faster-whisper 切片转写（词级时间戳）
+- [x] faster-whisper 切片转写（词级时间戳）
 - [ ] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，**可单测、确定性**）
 - [ ] 结构化 judge（注入 descriptor / case prompt，temperature=0）
 - [ ] 诊断层 + 雅思四维聚合 → 完整报告 JSON
@@ -70,3 +70,4 @@
 - 2026-06-06 — P0 FastAPI 后端骨架完成（`feature/fastapi-skeleton`）：app 工厂 + pydantic-settings 配置 + CORS + `GET /health`、`GET /`；`uv run python main.py` 起服务，自测 /health、/、/docs 均 200。下次做 SQLite 初始化 + 表结构。
 - 2026-06-06 — P0 SQLite 初始化 + 表结构完成：`app/schema.sql`（sessions/turns/reports，对齐 PRD §8.1）+ `app/db.py`（get_connection 开外键 / init_db 幂等建表）+ FastAPI lifespan 启动自动建表；`oral.db` 已 gitignore。自测：建表、列名、外键级联删除、CHECK(mode)、report_json 存取全通过。P0 后端就绪，仅剩「React 前端骨架」未做（按 PRD §10 排序，P1 不依赖前端，可先行）。下次按选择：React 骨架，或直接进 P1 录音—评流水线（先做 `POST /recordings` 上传入口）。
 - 2026-06-06 — P1 录音上传入口完成：`POST /recordings`（multipart WAV + {mode,sub_mode,scenario_case}）→ 校验（mode/子类一致性 + WAV 头）→ 落盘 `data/audio/{id}.wav` → 建 sessions 行（status=uploaded，duration 由 WAV 头算）。新增 `app/api/recordings.py`、`app/storage.py`、`app/crud.py`，加依赖 python-multipart。自测 6 用例（2 正常 + 4 校验错误）+ 落库/落盘全通过。下次做 P1 第 2 步：faster-whisper 切片转写（词级时间戳）。
+- 2026-06-06 — P1 faster-whisper 转写完成（**PR 模式**，分支 `feature/whisper-transcription`）：`app/transcribe.py` 提供 `transcribe(path)→Transcript`（词级时间戳 + 概率 + 语言 + 时长），VAD 关闭以保停顿信号，模型懒加载单例、config 可配（默认 small/cpu/int8/en）。加依赖 faster-whisper。自测：用 macOS say 生成语音转 16k/mono WAV，转写「I think science is mostly about curiosity.」7 词时间戳正确。下次做 P1 第 3 步：客观信号计算（语速/停顿/填充词/自我更正/词汇，可单测、确定性）。

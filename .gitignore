@@ -37,3 +37,9 @@ Thumbs.db
 
 # vibe coding
 docs/
+
+# SQLite 本地 demo 数据库
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_proxy: str | None = None
 
+    # SQLite 数据库文件路径（单写死 demo 用户的本地存储）
+    db_path: str = "oral.db"
+
     # 服务监听地址
     app_host: str = "127.0.0.1"
     app_port: int = 8000

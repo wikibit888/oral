@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.recordings import router as recordings_router
 from app.config import settings
 from app.db import init_db
 
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router)
+    app.include_router(recordings_router)
 
     @app.get("/", tags=["meta"])
     async def root() -> dict[str, str]:

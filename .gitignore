@@ -43,3 +43,6 @@ docs/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# 上传的录音 / 切片（运行时生成）
+data/audio/

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # SQLite 数据库文件路径（单写死 demo 用户的本地存储）
     db_path: str = "oral.db"
 
+    # 录音 / 切片落盘目录
+    audio_dir: str = "data/audio"
+
     # 服务监听地址
     app_host: str = "127.0.0.1"
     app_port: int = 8000

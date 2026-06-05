@@ -18,7 +18,7 @@
 - [x] SQLite 初始化 + 表结构（sessions / turns / reports）
 
 ### P1 录音—评流水线 ★（~6h，护城河）
-- [ ] 录音上传入口（`POST /recordings`，multipart WAV + {mode, sub_mode, scenario_case}）
+- [x] 录音上传入口（`POST /recordings`，multipart WAV + {mode, sub_mode, scenario_case}）
 - [ ] faster-whisper 切片转写（词级时间戳）
 - [ ] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，**可单测、确定性**）
 - [ ] 结构化 judge（注入 descriptor / case prompt，temperature=0）
@@ -69,3 +69,4 @@
 - 2026-06-06 — 建立 CLAUDE.md 与本 TODO；P0 仅有 Live hello demo，FastAPI/React/SQLite 待起。下次从 P0 后端骨架开始。
 - 2026-06-06 — P0 FastAPI 后端骨架完成（`feature/fastapi-skeleton`）：app 工厂 + pydantic-settings 配置 + CORS + `GET /health`、`GET /`；`uv run python main.py` 起服务，自测 /health、/、/docs 均 200。下次做 SQLite 初始化 + 表结构。
 - 2026-06-06 — P0 SQLite 初始化 + 表结构完成：`app/schema.sql`（sessions/turns/reports，对齐 PRD §8.1）+ `app/db.py`（get_connection 开外键 / init_db 幂等建表）+ FastAPI lifespan 启动自动建表；`oral.db` 已 gitignore。自测：建表、列名、外键级联删除、CHECK(mode)、report_json 存取全通过。P0 后端就绪，仅剩「React 前端骨架」未做（按 PRD §10 排序，P1 不依赖前端，可先行）。下次按选择：React 骨架，或直接进 P1 录音—评流水线（先做 `POST /recordings` 上传入口）。
+- 2026-06-06 — P1 录音上传入口完成：`POST /recordings`（multipart WAV + {mode,sub_mode,scenario_case}）→ 校验（mode/子类一致性 + WAV 头）→ 落盘 `data/audio/{id}.wav` → 建 sessions 行（status=uploaded，duration 由 WAV 头算）。新增 `app/api/recordings.py`、`app/storage.py`、`app/crud.py`，加依赖 python-multipart。自测 6 用例（2 正常 + 4 校验错误）+ 落库/落盘全通过。下次做 P1 第 2 步：faster-whisper 切片转写（词级时间戳）。

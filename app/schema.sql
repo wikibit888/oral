@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     audio_path    TEXT,                                          -- 整段会话音频
     -- 状态枚举（SCHEMA §5.1）: live(Live 会话中) | recording(方式 B 录音中)
     --   | processing(judge 跑中) | completed(报告就绪) | failed
-    -- 过渡: uploaded 为旧一次性 POST /recordings 产物，会话化接口取代后移除
     -- 不设 DEFAULT：调用方必须显式给状态，杜绝静默落错态（review S1）
     status        TEXT NOT NULL,
     is_seed       INTEGER NOT NULL DEFAULT 0                     -- Library 标注"演示数据"

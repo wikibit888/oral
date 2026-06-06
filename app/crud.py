@@ -41,6 +41,15 @@ def get_session(session_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def add_session_duration(session_id: str, delta_s: float) -> None:
+    """累加会话时长（方式 B 逐题上传时同步累计，Library 展示 / review 判据用）。"""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE sessions SET duration_s = COALESCE(duration_s, 0) + ? WHERE id = ?",
+            (delta_s, session_id),
+        )
+
+
 def update_session_status(session_id: str, status: str) -> None:
     """推进会话状态机（SCHEMA §5.1）：live|recording → processing → completed|failed。"""
     with get_connection() as conn:
@@ -89,13 +98,20 @@ def finish_turn(
 
 
 def list_processed_user_turns(session_id: str) -> list[sqlite3.Row]:
-    """取一个会话已完成转写的用户回合（finalize 合并信号 + 选切片用），按落地顺序。"""
+    """取一个会话已完成转写的用户回合（finalize 合并信号 + 选切片用），按落地顺序。
+
+    按 clip_path 去重取最新（MAX(id)）：方式 B 重录同一题会对同一文件再次 ingest，
+    旧转写行若不去重会把词序列翻倍、拉偏信号（review W4）。Live 路径切片名带递增
+    序号天然唯一，本去重无副作用。
+    """
     with get_connection() as conn:
         return conn.execute(
             "SELECT * FROM turns "
             "WHERE session_id = ? AND role = 'user' AND transcript_json IS NOT NULL "
+            "AND id IN (SELECT MAX(id) FROM turns "
+            "           WHERE session_id = ? AND role = 'user' GROUP BY clip_path) "
             "ORDER BY id",
-            (session_id,),
+            (session_id, session_id),
         ).fetchall()
 
 

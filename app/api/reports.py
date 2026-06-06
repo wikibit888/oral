@@ -17,7 +17,6 @@ class ReportResponse(BaseModel):
     id: str
     mode: str
     # SCHEMA §5.1 枚举: live | recording | processing | completed | failed
-    # （uploaded 为旧 POST /recordings 过渡态，会话化接口取代后移除）
     status: str
     report: Report | None = None     # 仅 status=completed 且报告已落库时有值
 

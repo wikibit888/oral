@@ -85,7 +85,7 @@ def test_init_db_migrates_legacy_db(tmp_path, monkeypatch):
         }
         assert rows["old-done"]["status"] == "completed"           # done → completed
         assert rows["old-rec"]["status"] == "live"                 # recording → live
-        assert rows["old-up"]["status"] == "uploaded"              # 过渡态保留（P4c 移除）
+        assert rows["old-up"]["status"] == "failed"                # v2：卡死的 uploaded 置 failed
         assert rows["old-done"]["is_seed"] == 0                    # 旧行补默认值
         # settings 表 + 种子行也一并就位
         n = c.execute("SELECT COUNT(*) AS n FROM settings").fetchone()["n"]

@@ -81,7 +81,7 @@ def _unscorable_report() -> Report:
     )
 
 
-def _seed_session(mode, sub_mode=None, scenario_case=None, audio_path="/fake.wav", status="uploaded"):
+def _seed_session(mode, sub_mode=None, scenario_case=None, audio_path="/fake.wav", status="recording"):
     crud.create_session(
         session_id="s1", mode=mode, sub_mode=sub_mode, scenario_case=scenario_case,
         audio_path=audio_path, duration_s=DURATION, status=status,
@@ -102,14 +102,18 @@ def _patch_stages(monkeypatch, report, file_uri=None, transcript=TR):
     return captured
 
 
-# —— 一次性入口（旧 POST /recordings 路径，单切片走增量机制）—— #
+# —— 单切片全链路（ingest → finalize，方式 B 单题等价路径）—— #
+def _ingest_and_finalize(session_id="s1", clip="/fake.wav"):
+    pipeline.ingest_clip(session_id, clip)
+    pipeline.finalize_session(session_id)
+
 def test_ielts_pipeline_persists_normalized_columns(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p2")
     _patch_stages(monkeypatch, _ielts_report())
 
-    pipeline.process_session("s1")
+    _ingest_and_finalize()
 
-    # 状态推进到 done
+    # 状态推进到 completed
     assert crud.get_session("s1")["status"] == "completed"
 
     row = crud.get_report("s1")
@@ -141,7 +145,7 @@ def test_error_rate_persisted_per_100_words(tmp_db, monkeypatch):
     ]
     _patch_stages(monkeypatch, _ielts_report(frequent_errors=errors))
 
-    pipeline.process_session("s1")
+    _ingest_and_finalize()
 
     assert crud.get_report("s1")["error_rate"] == 60.0
 
@@ -150,7 +154,7 @@ def test_pipeline_passes_session_fields_and_clips_to_judge(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p3")
     captured = _patch_stages(monkeypatch, _ielts_report(), file_uri="files/abc")
 
-    pipeline.process_session("s1")
+    _ingest_and_finalize()
 
     # judge 收到会话上下文 + 切片引用（含预上传 URI）+ 合并信号
     assert captured["mode"] == "ielts"
@@ -168,7 +172,7 @@ def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):
     _seed_session("scenario", scenario_case="ordering")
     _patch_stages(monkeypatch, _scenario_report())
 
-    pipeline.process_session("s1")
+    _ingest_and_finalize()
 
     row = crud.get_report("s1")
     assert row["mode"] == "scenario"
@@ -179,11 +183,11 @@ def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):
 
 
 def test_unscorable_ielts_persists_done_with_flag(tmp_db, monkeypatch):
-    # 不可评雅思输入不再哑失败：status=done、band 列 NULL、报告带 unscorable + 诊断层
+    # 不可评雅思输入不再哑失败：status=completed、band 列 NULL、报告带 unscorable + 诊断层
     _seed_session("ielts", sub_mode="module_p2")
     _patch_stages(monkeypatch, _unscorable_report())
 
-    pipeline.process_session("s1")
+    _ingest_and_finalize()
 
     assert crud.get_session("s1")["status"] == "completed"     # 不是 failed
     row = crud.get_report("s1")
@@ -196,6 +200,20 @@ def test_unscorable_ielts_persists_done_with_flag(tmp_db, monkeypatch):
     assert rep.diagnostics.vocabulary_diversity_pct == 80.0   # 诊断层保留可读
 
 
+def test_reupload_same_clip_dedupes_to_latest(tmp_db, monkeypatch):
+    # review W4：方式 B 同题重录 = 同 clip_path 再次 ingest——finalize 只取
+    # 最新一次转写，词序列/信号不翻倍
+    _seed_session("ielts", sub_mode="module_p2")
+    captured = _patch_stages(monkeypatch, _ielts_report())
+
+    pipeline.ingest_clip("s1", "/fake.wav")
+    pipeline.ingest_clip("s1", "/fake.wav")   # 重录同一题
+    pipeline.finalize_session("s1")
+
+    assert captured["recordings"] == 1                     # 去重后只算一份
+    assert captured["signals"].word_count == len(WORDS)    # 词数不翻倍
+
+
 def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p1")
     monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
@@ -206,15 +224,17 @@ def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch)
     monkeypatch.setattr(pipeline, "transcribe", boom)
 
     with pytest.raises(RuntimeError, match="whisper 挂了"):
-        pipeline.process_session("s1")
-
+        pipeline.ingest_clip("s1", "/fake.wav")
+    # ingest 炸了不碰状态（API 层吞日志）；review 后 finalize 无已转写切片 → failed
+    with pytest.raises(ValueError, match="无已转写"):
+        pipeline.finalize_session("s1")
     assert crud.get_session("s1")["status"] == "failed"
     assert crud.get_report("s1") is None          # 不留半份报告
 
 
 def test_judge_failure_in_finalize_marks_failed_no_report(tmp_db, monkeypatch):
     # review 补漏：ingest 成功、finalize 阶段 run_judge 失败——走的是 finalize_session
-    # 自己的 except（不是 process_session 的），仍须 failed + 不写半份报告。
+    # 自己的 except，仍须 failed + 不写半份报告。
     _seed_session("ielts", sub_mode="module_p1")
     monkeypatch.setattr(pipeline, "transcribe", lambda path: TR)
     monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
@@ -224,8 +244,9 @@ def test_judge_failure_in_finalize_marks_failed_no_report(tmp_db, monkeypatch):
 
     monkeypatch.setattr(pipeline, "run_judge", judge_boom)
 
+    pipeline.ingest_clip("s1", "/fake.wav")
     with pytest.raises(RuntimeError, match="judge 挂了"):
-        pipeline.process_session("s1")
+        pipeline.finalize_session("s1")
 
     assert crud.get_session("s1")["status"] == "failed"
     assert crud.get_report("s1") is None
@@ -233,32 +254,25 @@ def test_judge_failure_in_finalize_marks_failed_no_report(tmp_db, monkeypatch):
 
 def test_pipeline_missing_session_raises(tmp_db):
     with pytest.raises(ValueError, match="不存在"):
-        pipeline.process_session("nope")
-
-
-def test_pipeline_missing_audio_raises_before_processing(tmp_db, monkeypatch):
-    _seed_session("ielts", sub_mode="module_p1", audio_path=None)
-    _patch_stages(monkeypatch, _ielts_report())
-
-    with pytest.raises(ValueError, match="无音频"):
-        pipeline.process_session("s1")
-    # 没音频在置 processing 前就拦下，状态不变
-    assert crud.get_session("s1")["status"] == "uploaded"
+        pipeline.ingest_clip("nope", "/fake.wav")
+    with pytest.raises(ValueError, match="不存在"):
+        pipeline.finalize_session("nope")
 
 
 def test_pipeline_reprocess_is_idempotent(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p2")
     captured = _patch_stages(monkeypatch, _ielts_report())
 
-    pipeline.process_session("s1")
-    pipeline.process_session("s1")                 # 重跑不报错、不重复行
+    pipeline.ingest_clip("s1", "/fake.wav")
+    pipeline.finalize_session("s1")
+    pipeline.finalize_session("s1")        # finalize 重跑不报错、不重复报告行
 
     assert crud.get_session("s1")["status"] == "completed"   # 第二次也正常收尾到 completed
     with db.get_connection() as conn:
         n = conn.execute("SELECT COUNT(*) AS n FROM reports WHERE session_id = ?", ("s1",)).fetchone()["n"]
         t = conn.execute("SELECT COUNT(*) AS n FROM turns WHERE session_id = ?", ("s1",)).fetchone()["n"]
     assert n == 1
-    assert t == 1                                  # 重跑前清旧 turns，词序列不翻倍
+    assert t == 1                                  # ingest 只跑一次 → 单 turn；finalize 重跑不增行
     assert len(captured["clips"]) == 1
 
 

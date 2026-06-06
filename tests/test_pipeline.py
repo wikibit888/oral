@@ -110,7 +110,7 @@ def test_ielts_pipeline_persists_normalized_columns(tmp_db, monkeypatch):
     pipeline.process_session("s1")
 
     # 状态推进到 done
-    assert crud.get_session("s1")["status"] == "done"
+    assert crud.get_session("s1")["status"] == "completed"
 
     row = crud.get_report("s1")
     assert row is not None
@@ -185,7 +185,7 @@ def test_unscorable_ielts_persists_done_with_flag(tmp_db, monkeypatch):
 
     pipeline.process_session("s1")
 
-    assert crud.get_session("s1")["status"] == "done"     # 不是 failed
+    assert crud.get_session("s1")["status"] == "completed"     # 不是 failed
     row = crud.get_report("s1")
     assert row is not None
     assert row["overall_band"] is None
@@ -253,7 +253,7 @@ def test_pipeline_reprocess_is_idempotent(tmp_db, monkeypatch):
     pipeline.process_session("s1")
     pipeline.process_session("s1")                 # 重跑不报错、不重复行
 
-    assert crud.get_session("s1")["status"] == "done"   # 第二次也正常收尾到 done
+    assert crud.get_session("s1")["status"] == "completed"   # 第二次也正常收尾到 completed
     with db.get_connection() as conn:
         n = conn.execute("SELECT COUNT(*) AS n FROM reports WHERE session_id = ?", ("s1",)).fetchone()["n"]
         t = conn.execute("SELECT COUNT(*) AS n FROM turns WHERE session_id = ?", ("s1",)).fetchone()["n"]
@@ -318,7 +318,7 @@ def test_incremental_two_clips_then_finalize(tmp_db, monkeypatch):
     pipeline.ingest_clip("s1", "/clip2.wav")
     pipeline.finalize_session("s1")
 
-    assert crud.get_session("s1")["status"] == "done"
+    assert crud.get_session("s1")["status"] == "completed"
     # judge 收到合并 transcript + 按合并词序列复算的信号 + 两段切片引用
     merged = pipeline.merge_transcripts([CLIP1, CLIP2])
     assert captured["transcript"].text == "i think science is curiosity"

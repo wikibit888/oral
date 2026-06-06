@@ -16,6 +16,8 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # SQL 标识符白名单（_ensure_columns 用）：仅字母/下划线，掐死注入面。
 _IDENT_RE = re.compile(r"^[A-Za-z_]+$")
+# 列 DDL 白名单：允许字母/数字/下划线/空格（如 "INTEGER NOT NULL DEFAULT 0"）
+_DDL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 
 
 @contextmanager
@@ -52,6 +54,32 @@ def init_db() -> None:
             "turns",
             {"transcript_json": "TEXT", "file_uri": "TEXT"},
         )
+        _ensure_columns(
+            conn,
+            "sessions",
+            {"is_seed": "INTEGER NOT NULL DEFAULT 0"},
+        )
+        _migrate_status_enum_once(conn)
+
+
+# 数据迁移版本（PRAGMA user_version）：每个一次性迁移占一个版本号，只升不降。
+_STATUS_ENUM_VERSION = 1
+
+
+def _migrate_status_enum_once(conn: sqlite3.Connection) -> None:
+    """status 枚举一次性迁移（SCHEMA §5.1）：done→completed、recording→live。
+
+    用 PRAGMA user_version 门控——**绝不能每次启动重跑**：会话化接口（P4c）
+    之后 recording 是方式 B 录音中的活跃态，重跑会把活跃行误迁成 live
+    （review C1）。版本 0 的库（升级前 recording 行全部来自 Live 会话）跑
+    一次后落版本号，之后永久跳过。
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= _STATUS_ENUM_VERSION:
+        return
+    conn.execute("UPDATE sessions SET status='completed' WHERE status='done'")
+    conn.execute("UPDATE sessions SET status='live' WHERE status='recording'")
+    conn.execute(f"PRAGMA user_version = {_STATUS_ENUM_VERSION}")
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
@@ -64,7 +92,7 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str
         raise ValueError(f"非法表名: {table!r}")
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     for name, ddl in columns.items():
-        if not _IDENT_RE.match(name) or not _IDENT_RE.match(ddl.replace(" ", "_")):
+        if not _IDENT_RE.match(name) or not _DDL_RE.match(ddl):
             raise ValueError(f"非法列定义: {name!r} {ddl!r}")
         if name not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")

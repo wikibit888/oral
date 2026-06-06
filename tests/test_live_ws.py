@@ -548,7 +548,7 @@ def test_client_disconnect_does_not_trigger_finalize(client, monkeypatch):
 
 
 def test_disconnect_with_clips_keeps_session_row(client, monkeypatch):
-    # 说过话（已切出切片）的弃局会话保留素材，停在 recording 不触发 judge
+    # 说过话（已切出切片）的弃局会话保留素材，停在 live 不触发 judge
     half_sec = b"\x01" * 16000
     session = TriggeredFakeLiveSession(
         responses=[_audio_resp(b"\x0a")],     # 考官开口 → 封切片1
@@ -564,7 +564,7 @@ def test_disconnect_with_clips_keeps_session_row(client, monkeypatch):
 
     time.sleep(0.3)                           # 给孤儿清理任务一个误删的机会窗口
     row = crud.get_session(session_id)
-    assert row is not None and row["status"] == "recording"
+    assert row is not None and row["status"] == "live"
 
 
 def test_end_session_flips_status_to_processing_immediately(client, monkeypatch):

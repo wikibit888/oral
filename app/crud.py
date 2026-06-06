@@ -17,14 +17,18 @@ def create_session(
     audio_path: str | None,
     duration_s: float | None,
     status: str,
+    is_seed: bool = False,
 ) -> str:
-    """插入一条会话记录，返回其 id。"""
+    """插入一条会话记录，返回其 id。is_seed 标注演示数据（seed 脚本用）。"""
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO sessions "
-            "(id, mode, sub_mode, scenario_case, audio_path, duration_s, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (session_id, mode, sub_mode, scenario_case, audio_path, duration_s, status),
+            "(id, mode, sub_mode, scenario_case, audio_path, duration_s, status, is_seed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id, mode, sub_mode, scenario_case, audio_path, duration_s,
+                status, int(is_seed),
+            ),
         )
     return session_id
 
@@ -38,7 +42,7 @@ def get_session(session_id: str) -> sqlite3.Row | None:
 
 
 def update_session_status(session_id: str, status: str) -> None:
-    """推进会话状态机：(recording →) uploaded → processing → done | failed。"""
+    """推进会话状态机（SCHEMA §5.1）：live|recording → processing → completed|failed。"""
     with get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET status = ? WHERE id = ?", (status, session_id)
@@ -140,3 +144,23 @@ def get_report(session_id: str) -> sqlite3.Row | None:
         return conn.execute(
             "SELECT * FROM reports WHERE session_id = ?", (session_id,)
         ).fetchone()
+
+
+# —— settings（单 demo 用户单行，id 恒为 1；API 暴露归 P6）—— #
+
+
+def get_target_band() -> float | None:
+    """取用户目标 band；未设置返回 None。"""
+    with get_connection() as conn:
+        row = conn.execute("SELECT target_band FROM settings WHERE id = 1").fetchone()
+        return row["target_band"] if row is not None else None
+
+
+def set_target_band(target_band: float | None) -> None:
+    """写用户目标 band（UPSERT 单行，None 表示清除）。"""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO settings (id, target_band) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET target_band = excluded.target_band",
+            (target_band,),
+        )

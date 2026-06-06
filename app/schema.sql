@@ -11,10 +11,23 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     duration_s    REAL,
     audio_path    TEXT,                                          -- 整段会话音频
-    status        TEXT NOT NULL DEFAULT 'created'                -- 录音入口: uploaded → processing → done | failed（Live 方式 A 另有 recording 态）
+    -- 状态枚举（SCHEMA §5.1）: live(Live 会话中) | recording(方式 B 录音中)
+    --   | processing(judge 跑中) | completed(报告就绪) | failed
+    -- 过渡: uploaded 为旧一次性 POST /recordings 产物，会话化接口取代后移除
+    -- 不设 DEFAULT：调用方必须显式给状态，杜绝静默落错态（review S1）
+    status        TEXT NOT NULL,
+    is_seed       INTEGER NOT NULL DEFAULT 0                     -- Library 标注"演示数据"
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
+
+-- 单 demo 用户设置（单行表，id 恒为 1）：Review 面板目标差距用
+CREATE TABLE IF NOT EXISTS settings (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    target_band REAL                                             -- 用户目标 band；未设置为 NULL
+);
+
+INSERT OR IGNORE INTO settings (id, target_band) VALUES (1, NULL);
 
 -- 每个对话回合（用户 / 考官 / persona），含课后切片用的时间戳与音频片段。
 -- 增量流水线（SCHEMA §3）：切片落地即后台转写 + Files API 预上传，结果挂本行；

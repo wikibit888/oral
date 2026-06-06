@@ -5,19 +5,32 @@
 """
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from app.config import settings
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
-def get_connection() -> sqlite3.Connection:
-    """打开一个连接：开启外键约束、按列名访问行（sqlite3.Row）。"""
+@contextmanager
+def get_connection() -> Iterator[sqlite3.Connection]:
+    """连接的上下文管理器：开外键约束、按列名取行、成功提交/异常回滚、总是关闭。
+
+    读写都走这里，退出即关闭——报告页会高频轮询 GET /reports，连接不关会泄漏。
+    """
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db() -> None:

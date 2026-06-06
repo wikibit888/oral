@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     duration_s    REAL,
     audio_path    TEXT,                                          -- 整段会话音频
-    status        TEXT NOT NULL DEFAULT 'created'                -- created | recording | processing | done | failed
+    status        TEXT NOT NULL DEFAULT 'created'                -- 录音入口: uploaded → processing → done | failed（Live 方式 A 另有 recording 态）
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);

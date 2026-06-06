@@ -8,7 +8,8 @@
   （SCHEMA §3），优先引用 Files API 预上传的 file URI（省掉课后上传大音频），
   无 URI 时回退 inline bytes；情景只走文字诊断；
 - overall_band 由系统按四维确定性聚合（judge 不自算；信号≠成绩）；
-- band 只在雅思：情景强制 dimensions / overall_band 为 None；
+- 数字 band 只在雅思方式 A（sub_mode=exam）：方式 B（module_pX）四维仅作内部
+  诊断依据、最终置空（descriptor 对齐诊断，IELTS.md §3）；情景强制无 band；
 - 雅思 judge 拒评（dimensions=None）标记 unscorable 而非抛错，保留诊断层、不哑失败。
 """
 
@@ -190,7 +191,8 @@ def run_judge(
         ),
     )
 
-    if mode == "ielts":
+    if mode == "ielts" and sub_mode in (None, "exam"):
+        # 方式 A（模拟考试）；sub_mode=None 视同 A（直接调用方未传时保持旧行为）。
         if report.dimensions is None:
             # judge 依 grounding 铁律拒评（静音 / 非英语 / 录音问题）——标记 unscorable，
             # 不再当硬错误抛出；保留 judge 已产出的诊断层，让用户仍有反馈而非哑失败。
@@ -201,12 +203,38 @@ def run_judge(
             _snap_dimension_bands(report.dimensions)    # 各维对齐 0.5 半档（W4）
             # overall_band 由系统聚合，judge 不自算。
             report.overall_band = aggregate_overall_band(report.dimensions)
+    elif mode == "ielts":
+        # 方式 B（module_pX）：**最终报告不出数字 band**——单 Part 样本碎，band
+        # 解释力弱（IELTS.md §1/§3）。四维只是 judge 的内部诊断依据，一律剥除。
+        # 可评性**只看诊断层**（不绑 dims：模型可能漏填 / 高负载降级；也可能填了
+        # dims 却给空诊断）：B 用户唯一可见的就是诊断层，全空即拒评（review W1）。
+        if _diagnostics_empty(report.diagnostics):
+            logger.info("run_judge: 方式 B judge 未产出任何诊断内容，标记 unscorable。")
+            report.unscorable = True
+            report.unscorable_reason = UNSCORABLE_REASON
+        report.dimensions = None
+        report.overall_band = None
     else:
         # band 只在雅思有意义：情景强制无 band，且 dimensions=None 是正常、非 unscorable。
         report.dimensions = None
         report.overall_band = None
 
     return report
+
+
+def _diagnostics_empty(diag: Diagnostics) -> bool:
+    """诊断层是否毫无可执行反馈（方式 B 的拒评判据）。
+
+    syntactic_analysis 是必填结构体不计；其余列表全空 = judge 没给出任何内容。
+    """
+    return not (
+        diag.top_priorities
+        or diag.frequent_errors
+        or diag.fossilized_errors
+        or diag.common_patterns
+        or diag.self_corrections
+        or diag.rewrites
+    )
 
 
 def _snap_dimension_bands(dims: Dimensions) -> None:

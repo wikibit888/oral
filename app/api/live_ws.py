@@ -19,9 +19,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+import random
+
 from app import crud
+from app.api.questions import _load_bank
 from app.live.bridge import bridge
 from app.live.client import connect_live
+from app.live.director import EXAMINER_SYSTEM_INSTRUCTION, IeltsDirector
 from app.live.tee import UserAudioTee
 from app.pipeline import finalize_session
 
@@ -81,9 +85,12 @@ async def live_ws(websocket: WebSocket) -> None:
 
     session_id: str | None = None
     tee: UserAudioTee | None = None
+    director: IeltsDirector | None = None
     ended = False
+    # 方式 A：中立考官 persona + 导演状态机（cue card 随机抽自题库 p2）
+    system_instruction = EXAMINER_SYSTEM_INSTRUCTION if sub_mode == "exam" else None
     try:
-        async with connect_live(turn_mode) as live_session:
+        async with connect_live(turn_mode, system_instruction) as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的
             # 会话不触发 judge（契约：仅 end_session 触发）：说过话的停在
             # recording 态留素材，零切片的在 finally 里清掉。
@@ -115,12 +122,17 @@ async def live_ws(websocket: WebSocket) -> None:
                 tee.finish()
                 _schedule_finalize(tee, session_id)
 
+            if sub_mode == "exam":
+                director = IeltsDirector(_pick_cue_card())
+                await director.start(websocket, live_session)
+
             await bridge(
                 websocket,
                 live_session,
                 turn_mode=turn_mode,
                 tee=tee,
                 on_end_session=_on_end_session,
+                director=director,
             )
     except WebSocketDisconnect:
         pass  # 客户端正常断开
@@ -132,6 +144,9 @@ async def live_ws(websocket: WebSocket) -> None:
                 {"type": "error", "message": "实时会话异常，请重试。"}
             )
     finally:
+        # 导演备题计时器是孤儿任务源：会话怎么结束都要取消（同步调用，无 await 点）
+        if director is not None:
+            director.cancel_timers()
         # 弃局且一个切片都没切出（React StrictMode 双连接的首条、误点进入等）
         # → 删孤儿行（联调发现③）。零切片 = 从未发起 ingest，删行无竞态。
         # 放在 close 之前：本协程可能已被取消，close 的 await 点会再抛
@@ -140,6 +155,11 @@ async def live_ws(websocket: WebSocket) -> None:
             _schedule_orphan_cleanup(session_id)
         with suppress(Exception):
             await websocket.close()
+
+
+def _pick_cue_card() -> dict:
+    """从题库 p2 随机抽一张 cue card（静态精选库 8 张，IELTS.md §2）。"""
+    return random.choice(_load_bank()["p2"])
 
 
 def _schedule_finalize(tee: UserAudioTee, session_id: str) -> None:

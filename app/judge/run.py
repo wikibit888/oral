@@ -4,7 +4,8 @@
 - temperature=0 + 结构化输出（response_schema=Report）；
 - 雅思额外喂音频切片，让模型听发音判可懂度；情景只走文字诊断；
 - overall_band 由系统按四维确定性聚合（judge 不自算；信号≠成绩）；
-- band 只在雅思：情景强制 dimensions / overall_band 为 None。
+- band 只在雅思：情景强制 dimensions / overall_band 为 None；
+- 雅思 judge 拒评（dimensions=None）标记 unscorable 而非抛错，保留诊断层、不哑失败。
 """
 
 import logging
@@ -22,6 +23,9 @@ from app.report import Dimensions, PracticeSummary, Report
 from app.signals import ObjectiveSignals
 
 logger = logging.getLogger(__name__)
+
+# 雅思拒评时给用户的统一说明（系统设置，不让 LLM 自由发挥）。
+UNSCORABLE_REASON = "无法评分：未检出可评的英语口语内容（可能是静音、非英语或录音问题），请重录后再试。"
 
 _genai_client: genai.Client | None = None
 
@@ -91,6 +95,9 @@ def run_judge(
     )
 
     # 结构化解析；parsed 为空时兜底，并在失败时带上响应上下文（W2）。
+    # 注意边界：解析失败（含缺 required 的 diagnostics 等 schema 违约）是**基础设施级错误**
+    # （截断 / 解码失败），向上抛、由 pipeline 置 failed——不标 unscorable。
+    # 系统故障不该引导用户「重录」；unscorable 仅指「judge 成功返回但拒评（dimensions=None）」。
     if resp.parsed is not None:
         report: Report = resp.parsed
     else:
@@ -109,14 +116,24 @@ def run_judge(
     )
     if mode == "ielts":
         if report.dimensions is None:
-            raise ValueError("IELTS judge 未返回四维 dimensions，无法聚合 overall_band")
-        _snap_dimension_bands(report.dimensions)        # 各维对齐 0.5 半档（W4）
-        # overall_band 由系统聚合，judge 不自算。
-        report.overall_band = aggregate_overall_band(report.dimensions)
+            # judge 依 grounding 铁律拒评（静音 / 非英语 / 录音问题）——标记 unscorable，
+            # 不再当硬错误抛出；保留 judge 已产出的诊断层，让用户仍有反馈而非哑失败。
+            logger.info("run_judge: IELTS judge 未返回四维 dimensions，标记 unscorable。")
+            report.overall_band = None
+            report.unscorable = True
+            report.unscorable_reason = UNSCORABLE_REASON
+        else:
+            _snap_dimension_bands(report.dimensions)    # 各维对齐 0.5 半档（W4）
+            # overall_band 由系统聚合，judge 不自算。
+            report.overall_band = aggregate_overall_band(report.dimensions)
+            report.unscorable = False
+            report.unscorable_reason = None
     else:
-        # band 只在雅思有意义：情景强制无 band。
+        # band 只在雅思有意义：情景强制无 band，且 dimensions=None 是正常、非 unscorable。
         report.dimensions = None
         report.overall_band = None
+        report.unscorable = False
+        report.unscorable_reason = None
 
     return report
 

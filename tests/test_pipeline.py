@@ -69,6 +69,16 @@ def _scenario_report() -> Report:
     )
 
 
+def _unscorable_report() -> Report:
+    # 模拟 run_judge 对不可评雅思输入返回的报告（无 band、标记 unscorable、诊断层仍在）
+    return Report(
+        practice_summary=PracticeSummary(speaking_time_s=0, sessions=1, recordings=1),
+        dimensions=None, overall_band=None,
+        unscorable=True, unscorable_reason="无法评分：请重录后再试。",
+        diagnostics=_diag(),
+    )
+
+
 def _seed_session(mode, sub_mode=None, scenario_case=None, audio_path="/fake.wav", status="uploaded"):
     crud.create_session(
         session_id="s1", mode=mode, sub_mode=sub_mode, scenario_case=scenario_case,
@@ -143,6 +153,24 @@ def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):
     assert row["fc_band"] is None and row["pron_band"] is None
     # 但通用流利度列照常有值（情景也喂趋势线）
     assert row["wpm"] is not None
+
+
+def test_unscorable_ielts_persists_done_with_flag(tmp_db, monkeypatch):
+    # 不可评雅思输入不再哑失败：status=done、band 列 NULL、报告带 unscorable + 诊断层
+    _seed_session("ielts", sub_mode="module_p2")
+    _patch_stages(monkeypatch, _unscorable_report())
+
+    pipeline.process_session("s1")
+
+    assert crud.get_session("s1")["status"] == "done"     # 不是 failed
+    row = crud.get_report("s1")
+    assert row is not None
+    assert row["overall_band"] is None
+    assert (row["fc_band"], row["pron_band"]) == (None, None)
+    rep = Report.model_validate_json(row["report_json"])
+    assert rep.unscorable is True
+    assert rep.unscorable_reason is not None
+    assert rep.diagnostics.vocabulary_diversity_pct == 80.0   # 诊断层保留可读
 
 
 def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch):

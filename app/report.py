@@ -84,4 +84,9 @@ class Report(BaseModel):
     practice_summary: PracticeSummary
     dimensions: Dimensions | None = None   # 仅雅思
     overall_band: float | None = None      # 仅雅思；情景不聚合、不出总分
+    # 雅思无法产出 band 时为 True（静音 / 非英语 / 录音问题，judge 依 grounding 铁律拒评）。
+    # 此时 dimensions/overall_band 为 None 但诊断层仍保留——区别于情景对话的「设计上无 band」。
+    # 系统确定性设置（同 overall_band），不交给 LLM 自填。
+    unscorable: bool = False
+    unscorable_reason: str | None = None
     diagnostics: Diagnostics

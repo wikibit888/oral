@@ -59,8 +59,8 @@
 - [ ] 顶部导航 TopNav：Practice（hover 下拉 IELTS/Scenario）/ Library / Review；会话 / 录音中隐藏
 - [ ] 首页两块改造（块1 产品介绍 + 块2 ModeSelect）+ `/practice` 页（复用 ModeSelect）
 - [ ] 报告页合并：处理态（流水线进度 + 骨架）+ 报告态（流式填充）同一路由 `/report/{id}`；删除独立 Processing 页
-- [ ] Library 页 + `GET /sessions` 列表接口（seed 标注"演示数据"）
-- [ ] Review 进步面板（原 Progress 改名）：band 轨迹（仅雅思 A）+ 雷达 + 流利度趋势 + 目标差距；`GET /progress` + `GET/PUT /settings`
+- [~] Library 页 + `GET /sessions` 列表接口（seed 标注"演示数据"）——后端接口 2026-06-07 PR #22 完成（倒序 + 摘要分 LEFT JOIN + status/is_seed；契约加 status 字段）；余前端页 + 验证
+- [~] Review 进步面板（原 Progress 改名）：band 轨迹（仅雅思 A）+ 雷达 + 流利度趋势 + 目标差距；`GET /progress` + `GET/PUT /settings`——后端接口随 PR #22 完成（band_series 仅方式 A / fluency_series 含 error_rate / gap 正负语义 / 0.5 倍数校验）；余前端面板 + 验证
 - [ ] seed 脚本（6–8 条历史会话，`is_seed` 标注；流利度爬升 + 雅思 A band 5.5→6.5）
 
 ### P7 eval + 收尾（~2h）
@@ -94,5 +94,6 @@
 2026-06-07 — P4 第 4 项题库完成并勾选（PR #15，连带勾 P3 第 3 项 cue card 库）：data/questions.json p1×8/p2×8 cue cards/p3×8 + GET /questions?part=（中文 422、id 内容 pin）+ /static/tts 挂载（tts_url 按文件存在性逐请求回填，TTS 落地免重启）；pytest 130 绿 + review NEEDS-FIX(C1 挂载缺失+W1-W5)→全修。与并行会话 PR #14 同窗零冲突（巷道隔离）。下次：P4b 数据模型升级（settings 表+is_seed+status 枚举）→ P4c 会话化接口 → P4d judge 按 sub_mode → P4e TTS 预生成；方式 B 后端齐后一次性 handoff 前端
 2026-06-07 — P2 第 5、7 项完成并勾选（**P2 全部完成**）：PTT（turn=ptt 关内建 VAD + 上行首帧 activity_start + turn_end→activity_end，natural 误发 turn_end 忽略不断流）+ 延迟徽章（LatencyMeter 相位机：ptt 以 turn_end 为停说点、natural 以最后非静音帧近似，考官首帧发 latency_ms 一轮一次）；pytest 130 绿（+16 用例，假时钟确定性）+ 真冒烟（ptt VAD 关实锤·latency 894ms / natural 2299ms）+ review PASS（warning/建议已修）/ judge 上游 503 持续未恢复（与本变更无关）/ 下次从 P3 导演状态机或 P4 方式 B 开始
 2026-06-07 — **P5 后端两项完成并勾选**（PR #21）：`app/scenario_cases.py` case 注册表（ordering/meeting persona + judge 侧重段；/ws/live 白名单由注册表推导、finalize 回填 case_prompt、未知 case 降级占位不 failed；persona 内置方括号指令规则为拓展项 ask_help 预留接线）。pytest 183 绿（+8）+ 三轮真冒烟（judge 无 band 命中点餐侧重·planted "want eat" 捕获 / ordering·meeting persona 真 Live 守角色 + 自然收尾）+ review PASS。ask_help 破壁按用户决策移入拓展区（不在 24h 主线）；handoff/inbox/006 情景前端接入契约已投递。下次：P6 后端件 PR-A（GET /sessions + GET /progress + settings API）
+2026-06-07 — **P6 后端件 PR-A 完成**（PR #22，P6 两项标 [~] 余前端）：GET /sessions（Library 倒序 + overall_band/wpm 摘要分 LEFT JOIN + status/is_seed，契约加 status）+ GET /progress（band_series 仅方式 A 三重过滤 / fluency_series 全模式含 error_rate / latest_bands / gap=target−latest 正负语义）+ GET/PUT /settings（0–9 且 0.5 倍数，null 清除）；SCHEMA §6.2/§6.4 字段名锁定。pytest 201 绿（+18）+ 真冒烟（真 oral.db：51 行列表 / 11 band 点 + 18 流利度点 / gap 计算正确 / 422 生效）+ review PASS（2🟡 测试缺口已补）。handoff/inbox/007 F5 契约件已投递（注明 seed 脚本未做、真库暂无 is_seed 行）/ 无阻塞 / 下次：P6 seed 脚本或修方式 A done 不发（done/005 🔴 模型抢戏）
 
 

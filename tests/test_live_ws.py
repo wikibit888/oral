@@ -58,8 +58,12 @@ class FakeLiveSession:
 
     def __init__(self, responses):
         self.sent: list = []
+        self.directions: list = []
         self._responses = responses
         self._first = True
+
+    async def send_client_content(self, *, turns, turn_complete=True):
+        self.directions.append(turns)      # 导演提示（方式 A）
 
     async def send_realtime_input(self, *, audio=None, activity_start=None, activity_end=None):
         self.sent.append(audio if audio is not None else (activity_start or activity_end))
@@ -100,8 +104,9 @@ def no_finalize(monkeypatch):
 
 def _patch_session(monkeypatch, session) -> None:
     @asynccontextmanager
-    async def fake_connect(turn_mode="natural"):
+    async def fake_connect(turn_mode="natural", system_instruction=None):
         session.turn_mode = turn_mode  # 记录穿透到连接层的轮次模式
+        session.system_instruction = system_instruction  # persona（方式 A 考官）
         yield session
 
     monkeypatch.setattr("app.api.live_ws.connect_live", fake_connect)
@@ -138,18 +143,24 @@ def test_invalid_params_rejected_before_live(client, query):
 
 
 def test_session_started_creates_ielts_a_row(client, monkeypatch):
-    _patch_session(monkeypatch, FakeLiveSession(responses=[]))
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
 
     with client.websocket_connect("/ws/live?mode=ielts_a&turn=natural") as ws:
         event = ws.receive_json()        # 建链第一条消息即 session_started
         assert event["type"] == "session_started"
         session_id = event["session_id"]
+        # 方式 A：导演随即开场（P1）
+        assert ws.receive_json() == {"type": "part_change", "part": "p1"}
         ws.send_text(json.dumps({"type": "end_session"}))
 
     row = crud.get_session(session_id)
     assert row["mode"] == "ielts"
     assert row["sub_mode"] == "exam"     # ielts_a ↦ mode=ielts + sub_mode=exam
     assert row["scenario_case"] is None
+    # 方式 A 注入中立考官 persona + 导演开场提示已发给 Live
+    assert session.system_instruction is not None and "examiner" in session.system_instruction
+    assert len(session.directions) == 1
 
 
 @pytest.mark.parametrize("case", ["ordering", "meeting"])
@@ -177,7 +188,7 @@ def test_create_session_failure_reports_error(client, monkeypatch):
 
     monkeypatch.setattr("app.api.live_ws.crud.create_session", boom)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         event = ws.receive_json()
     assert event["type"] == "error"
     assert _session_count() == 0
@@ -191,7 +202,7 @@ def test_live_connect_failure_leaves_no_session_row(client, monkeypatch):
 
     monkeypatch.setattr("app.api.live_ws.connect_live", broken_connect)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         event = ws.receive_json()
     assert event["type"] == "error"
     assert "实时会话异常" in event["message"]
@@ -205,7 +216,7 @@ def test_upstream_audio_forwarded_with_mime(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         ws.send_bytes(b"\x01\x02\x03\x04")
         ws.send_text(json.dumps({"type": "end_session"}))
@@ -226,7 +237,7 @@ def test_downstream_audio_and_transcripts(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         assert ws.receive_bytes() == b"\xaa\xbb"          # 24k PCM 直转 binary
         assert ws.receive_json() == {
@@ -251,7 +262,7 @@ def test_interrupted_and_turn_complete_forwarded(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         assert ws.receive_bytes() == b"\x0c"
         assert ws.receive_json() == {"type": "interrupted"}
@@ -263,7 +274,7 @@ def test_unknown_control_does_not_kill_session(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         ws.send_text(json.dumps({"type": "no_such_control"}))
         ws.send_text("not even json")
@@ -286,7 +297,7 @@ def test_downstream_failure_reports_error_event(client, monkeypatch):
 
     _patch_session(monkeypatch, BrokenSession(responses=[]))
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         assert ws.receive_bytes() == b"\x01"
         event = ws.receive_json()
@@ -301,7 +312,7 @@ def test_same_response_audio_and_transcript(client, monkeypatch):
     )
     _patch_session(monkeypatch, FakeLiveSession(responses=[resp]))
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                # session_started
         assert ws.receive_bytes() == b"\x0a"
         ev = ws.receive_json()
@@ -318,7 +329,7 @@ def test_ptt_activity_signals(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering&turn=ptt") as ws:
         ws.receive_json()                  # session_started
         ws.send_bytes(b"\x01\x02")         # 第一轮首帧
         ws.send_bytes(b"\x03\x04")         # 同轮第二帧：不重复补 start
@@ -337,7 +348,7 @@ def test_natural_no_activity_signals_turn_end_ignored(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()
         ws.send_bytes(b"\x01")
         ws.send_text(json.dumps({"type": "turn_end"}))
@@ -352,7 +363,7 @@ def test_ptt_turn_end_before_any_audio_ignored(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering&turn=ptt") as ws:
         ws.receive_json()
         ws.send_text(json.dumps({"type": "turn_end"}))   # 还没按下：activity 未开
         ws.send_text(json.dumps({"type": "end_session"}))
@@ -372,7 +383,7 @@ def test_latency_ms_emitted_once_on_examiner_first_frame(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                      # session_started
         ws.send_bytes(loud)
         assert ws.receive_bytes() == b"\x0a"   # 考官首帧
@@ -392,7 +403,7 @@ def test_latency_ms_ptt_after_turn_end(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering&turn=ptt") as ws:
         ws.receive_json()
         ws.send_bytes(quiet)
         ws.send_text(json.dumps({"type": "turn_end"}))
@@ -410,7 +421,7 @@ def test_no_latency_ms_when_user_never_spoke(client, monkeypatch, turn):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect(f"/ws/live?mode=ielts_a&turn={turn}") as ws:
+    with client.websocket_connect(f"/ws/live?mode=scenario&case=ordering&turn={turn}") as ws:
         ws.receive_json()
         assert ws.receive_bytes() == b"\x0a"
         ev = ws.receive_json()                 # 下一条 text 直接是转写，无 latency_ms
@@ -432,7 +443,7 @@ def test_end_session_triggers_finalize(client, monkeypatch):
 
     monkeypatch.setattr("app.api.live_ws.finalize_session", fake_finalize)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         session_id = ws.receive_json()["session_id"]
         ws.send_text(json.dumps({"type": "end_session"}))
 
@@ -451,6 +462,9 @@ class TriggeredFakeLiveSession(FakeLiveSession):
         self._trigger_on_activity_end = trigger_on_activity_end
         self._got = 0
         self._event = asyncio.Event()
+
+    async def send_client_content(self, *, turns, turn_complete=True):
+        self.directions.append(turns)      # 导演提示（方式 A）
 
     async def send_realtime_input(self, *, audio=None, activity_start=None, activity_end=None):
         await super().send_realtime_input(
@@ -512,7 +526,7 @@ def test_live_clips_ingested_then_finalized(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         ws.receive_json()                          # session_started
         ws.send_bytes(half_sec)                    # 第一轮用户音频
         assert ws.receive_bytes() == b"\x0a"       # 考官开口 → 切片1 已封
@@ -533,7 +547,7 @@ def test_client_disconnect_does_not_trigger_finalize(client, monkeypatch):
         "app.api.live_ws.finalize_session", lambda session_id: called.set()
     )
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         session_id = ws.receive_json()["session_id"]
         ws.send_bytes(b"\x09")
     # with 块退出即客户端断开（未发 end_session）；服务端正常收束、无悬挂
@@ -556,7 +570,7 @@ def test_disconnect_with_clips_keeps_session_row(client, monkeypatch):
     )
     _patch_session(monkeypatch, session)
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         session_id = ws.receive_json()["session_id"]
         ws.send_bytes(half_sec)
         assert ws.receive_bytes() == b"\x0a"  # 切片已切出（clip_count=1）
@@ -572,7 +586,7 @@ def test_end_session_flips_status_to_processing_immediately(client, monkeypatch)
     # 状态必须已是 processing（finalize 被打桩成 no-op，不会再推进状态）
     _patch_session(monkeypatch, FakeLiveSession(responses=[]))
 
-    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
         session_id = ws.receive_json()["session_id"]
         ws.send_text(json.dumps({"type": "end_session"}))
 

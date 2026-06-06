@@ -23,6 +23,11 @@ VALID_MODES = {"ielts", "scenario"}
 VALID_SUB_MODES = {"exam", "module_p1", "module_p2", "module_p3"}
 VALID_SCENARIO_CASES = {"ordering", "meeting"}
 
+# 固定音频契约（CLAUDE.md：mic in 16kHz / 16-bit / 单声道 PCM，无转码）
+EXPECTED_SAMPLE_RATE = 16000
+EXPECTED_CHANNELS = 1
+EXPECTED_SAMPLE_WIDTH = 2  # 字节，= 16-bit
+
 
 class RecordingCreated(BaseModel):
     id: str
@@ -34,15 +39,34 @@ class RecordingCreated(BaseModel):
 
 
 def _wav_duration_seconds(data: bytes) -> float:
-    """解析 WAV 头取时长（秒）；非合法 WAV 抛 422。"""
+    """解析 WAV 头、强制固定音频契约（16kHz / 单声道 / 16-bit），返回时长（秒）。
+
+    非合法 WAV 或违约格式一律抛 422。契约是「固定、无转码」——不在上传层做隐式重采样，
+    把不合规音频挡在流水线之外（否则只能靠 whisper 内部兜底解码，属契约漂移、信号不可控）。
+    """
+    # 非 PCM（mu-law/A-law/float 等压缩编码）会被 wave.open 当 "unknown format" 抛出，下面一并 422。
     try:
         with wave.open(io.BytesIO(data), "rb") as w:
             frames = w.getnframes()
             rate = w.getframerate()
+            channels = w.getnchannels()
+            width = w.getsampwidth()
     except (wave.Error, EOFError):
         raise HTTPException(status_code=422, detail="audio 必须是合法的 WAV 文件")
-    if not rate:
-        raise HTTPException(status_code=422, detail="WAV 采样率非法")
+    if rate != EXPECTED_SAMPLE_RATE:
+        raise HTTPException(
+            status_code=422, detail=f"采样率必须是 {EXPECTED_SAMPLE_RATE}Hz（收到 {rate}Hz）"
+        )
+    if channels != EXPECTED_CHANNELS:
+        raise HTTPException(
+            status_code=422, detail=f"必须是单声道 mono（收到 {channels} 声道）"
+        )
+    if width != EXPECTED_SAMPLE_WIDTH:
+        raise HTTPException(
+            status_code=422, detail=f"必须是 16-bit PCM（收到 {width * 8}-bit）"
+        )
+    if frames == 0:
+        raise HTTPException(status_code=422, detail="音频不能为空（0 帧）")
     return round(frames / rate, 3)
 
 

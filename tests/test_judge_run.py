@@ -1,5 +1,7 @@
 """judge 调用 + overall_band 聚合单测。Gemini 客户端被 mock，零网络、确定性。"""
 
+import json
+
 import pytest
 
 from app.judge import run as judge_run
@@ -146,9 +148,53 @@ def test_scenario_forces_no_band_and_no_audio(monkeypatch):
     assert len(fake.models.last["contents"]) == 1        # 情景不喂音频
 
 
-def test_ielts_missing_dimensions_raises(monkeypatch):
+def test_ielts_missing_dimensions_marks_unscorable(monkeypatch):
+    # 雅思 judge 拒评（dimensions=None）不再抛错：标记 unscorable，保留诊断层
     _patch(monkeypatch, _report(None, None))
-    with pytest.raises(ValueError):
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert rep.unscorable is True
+    assert rep.unscorable_reason == judge_run.UNSCORABLE_REASON
+    assert rep.dimensions is None
+    assert rep.overall_band is None
+    assert rep.diagnostics.vocabulary_diversity_pct == 50.0   # 诊断层保留
+
+
+def test_ielts_scorable_is_not_unscorable(monkeypatch):
+    fake = _patch(monkeypatch, _report(_dims(), None))
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert rep.unscorable is False
+    assert rep.unscorable_reason is None
+    assert rep.overall_band == 6.5
+
+
+def test_scenario_dimensions_none_is_not_unscorable(monkeypatch):
+    # 情景对话 dimensions=None 是设计上的正常态，绝不能被误标 unscorable
+    _patch(monkeypatch, _report(None, None))
+    rep = judge_run.run_judge(mode="scenario", transcript=TR, signals=SIG, scenario_case="ordering")
+    assert rep.unscorable is False
+    assert rep.unscorable_reason is None
+    assert rep.dimensions is None
+
+
+def test_ielts_scorable_overrides_llm_unscorable_true(monkeypatch):
+    # W3：即便 LLM 在可评响应里误填 unscorable=True，系统必须强制覆盖回 False
+    r = _report(_dims(), None)
+    r.unscorable = True
+    r.unscorable_reason = "bogus（LLM 不该填这个）"
+    _patch(monkeypatch, r)
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert rep.unscorable is False
+    assert rep.unscorable_reason is None
+    assert rep.overall_band == 6.5
+
+
+def test_missing_diagnostics_is_infra_failure_not_unscorable(monkeypatch):
+    # W1 边界：响应缺 required 的 diagnostics（schema 违约）→ 按基础设施错误抛（走 failed），
+    # 不得标 unscorable——系统故障不该引导用户「重录」。
+    d = json.loads(_report(None, None).model_dump_json())
+    d.pop("diagnostics")
+    _patch(monkeypatch, None, text=json.dumps(d))
+    with pytest.raises(RuntimeError, match="judge 响应解析失败"):
         judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
 
 

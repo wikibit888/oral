@@ -43,9 +43,9 @@
 ### P4 方式 B + 模式选择（~1.5h）
 - [x] 数据模型升级：`settings` 表（target_band）+ `sessions.is_seed` + status 枚举（SCHEMA §5.1）——2026-06-07 PR #16：user_version 门控一次性迁移（done→completed/recording→live，防 P4c 后重启误迁）+ settings 单行表 + crud target_band；review C1→修→复审 PASS；**BREAKING：GET /reports status 改名，待统一 handoff 前端**
 - [x] 会话化接口：`POST /sessions` → 逐题 `POST /sessions/{id}/recordings` → `POST /sessions/{id}/review`（Get Review 触发 judge）→ `DELETE /sessions/{id}`（Give Up 物理删除）；取代旧一次性 `POST /recordings`（SCHEMA §6.2）——2026-06-07 PR #17：上传/review 竞态关死 + 同题重录去重 + uploaded 死态迁移 v2；149 测 + 真冒烟（双题→38s 报告）；review C1→修→复审 PASS
-- [ ] judge 按 sub_mode 区分：方式 B 注入 descriptor 按 Part 侧重诊断（含发音），**不出数字 band**（dimensions / overall_band 置空）
+- [x] judge 按 sub_mode 区分：方式 B 注入 descriptor 按 Part 侧重诊断（含发音），**不出数字 band**（dimensions / overall_band 置空）——2026-06-07 PR #18：MODULE_FOCUS 三 Part 侧重 + B 可评性只看诊断层（对漏填 dims/降级输出鲁棒）；真冒烟 flash-lite 零 band 泄漏；review PASS
 - [x] 静态题库 `data/questions.json`（p1/p2/p3 多题）+ `GET /questions?part=`——2026-06-07 PR #15：p1×8/p2×8/p3×8，tts_url 按文件存在性逐请求回填（TTS 落地免重启），/static/tts 挂载随行；review NEEDS-FIX(C1+W1-W5)→全修
-- [ ] Gemini TTS 预生成题库音频 + `/static/tts` 挂载
+- [x] Gemini TTS 预生成题库音频 + `/static/tts` 挂载——2026-06-07 PR #19（挂载已随 #15）：python -m app.tts 增量幂等 + 6.5s 节流贴 10/min 配额 + 429 重试；真跑 24/24 全生成、tts_url 回填 200；review PASS
 - [ ] 三 Part 录音模块：多题流程（TTS 读题 → 录音 → Next 逐题；按钮 Pause/Resume、Next、Get Review、Give Up）
 - [ ] 雅思 A/B 选择页（验证 + review）
 
@@ -88,6 +88,7 @@
 2026-06-06 — P2 第 6 项 tee 完成并勾选：UserAudioTee 地板状态机（流位置时钟=字节推导；考官首帧封片 / turn_complete 开新片 / interrupted 2s 预缓冲回补打断起头 / finish 封口闸门防 drain 漏片）+ save_clip 裸 PCM 封 WAV + drain 排干再 finalize；pytest 101 绿 + 真冒烟（live 会话出真报告：band 6.0·planted 主谓错误捕获·turns ts/file_uri 落库·TTR 回填一致）+ review PASS（W1-W4/S1-S3 已修）；期间 judge 上游偶发 503 会直接 failed（无重试，记 P8 缓冲考虑）/ 下次从 F6 联调或 PTT + 轮次结束开始
 2026-06-07 — P2 联调修缮（前端 F6 回执 4 条 + judge 503）：end_session 瞬间置 processing（修契约外过渡态）、零切片弃局删孤儿行（StrictMode 双连接）、connect_live 建链 OSError 重试一次（真实 TLS reset 场景验证触发）、judge 上游 5xx 按 (2,5)s 退避重试、APP_RELOAD 可配（联调防热重载杀会话）、SCHEMA §6.3 status 枚举对齐现实现；pytest 110 绿 + 修缮冒烟两项 PASS + review PASS / judge 上游持续高负载时重试耗尽仍诚实 failed / 下次从 F6 功能验证 + review（勾选 P2 第 4 项）或 PTT 开始
 2026-06-07 — P2 第 4 项 F6 分轨验收完成并勾选：功能验证 PASS（vitest 73 绿 + lint + build + 前端真链路实测 + 后端两轮真冒烟）；独立 review NEEDS-FIX 四警告（W1 End 漏 flush 合批尾音→tee 截最后一段语音 / W2 Safari 采样率钳制 2 倍速 / W3 PcmPlayer 零单测 / W4 合批续推用例）已按 P0 先例在前端工作树代修，复验 PASS；交接 handoff/inbox/003 待前端 review 后随其轨道提交 / 下次从 PTT + 轮次结束开始
+2026-06-07 — **P4 后端五项全部完成**（PR #16/#17/#18/#19，#15 已先行）：数据模型升级（settings/is_seed/status 枚举+user_version 门控迁移）→ 会话化接口（POST /sessions 族，竞态关死/重录去重）→ judge 按 sub_mode（方式 B 无数字 band、可评性只看诊断层）→ TTS 预生成（24/24 真跑全生成）。pytest 163 绿；四轮独立 review（两轮 NEEDS-FIX 阻断项均修复后复审 PASS）；三次真冒烟（方式 B 双题 38s 报告/B 无 band 12s/TTS 回填 200）。判断记录：gemini-2.5-flash 间歇 503 风暴，B 冒烟改 JUDGE_MODEL=flash-lite 绕行验证（生产默认不动）。**BREAKING 汇总待 handoff/inbox/004**：status 枚举改名、POST /recordings→/sessions 族、B 报告无 band。下次：投递 handoff 004 → P3 导演状态机（live 巷道已清）
 2026-06-07 — P4 第 4 项题库完成并勾选（PR #15，连带勾 P3 第 3 项 cue card 库）：data/questions.json p1×8/p2×8 cue cards/p3×8 + GET /questions?part=（中文 422、id 内容 pin）+ /static/tts 挂载（tts_url 按文件存在性逐请求回填，TTS 落地免重启）；pytest 130 绿 + review NEEDS-FIX(C1 挂载缺失+W1-W5)→全修。与并行会话 PR #14 同窗零冲突（巷道隔离）。下次：P4b 数据模型升级（settings 表+is_seed+status 枚举）→ P4c 会话化接口 → P4d judge 按 sub_mode → P4e TTS 预生成；方式 B 后端齐后一次性 handoff 前端
 2026-06-07 — P2 第 5、7 项完成并勾选（**P2 全部完成**）：PTT（turn=ptt 关内建 VAD + 上行首帧 activity_start + turn_end→activity_end，natural 误发 turn_end 忽略不断流）+ 延迟徽章（LatencyMeter 相位机：ptt 以 turn_end 为停说点、natural 以最后非静音帧近似，考官首帧发 latency_ms 一轮一次）；pytest 130 绿（+16 用例，假时钟确定性）+ 真冒烟（ptt VAD 关实锤·latency 894ms / natural 2299ms）+ review PASS（warning/建议已修）/ judge 上游 503 持续未恢复（与本变更无关）/ 下次从 P3 导演状态机或 P4 方式 B 开始
 

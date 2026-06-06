@@ -29,7 +29,7 @@
 - [x] WS 代理 Live（双向音频桥 + 转写事件；review PASS + 真冒烟通过）——2026-06-06 随前三项统一 PR 提交
 - [x] 事件转发补全：`interrupted` / `turn_complete`（barge-in 前端清播放队列）+ 建链 `session_started {session_id}`（契约 FRONTEND §5）——真冒烟 turn_complete 真实到达
 - [x] /ws/live 连接参数：`mode=ielts_a|scenario & case & turn=ptt|natural`；`end_session` 自动触发 judge——参数校验 + sessions 落库（status=recording）；turn=ptt 仅校验，turn_end 语义归「PTT + 轮次结束」项；tee 未接线前 finalize 无切片落 failed 属预期
-- [ ] AudioWorklet → 16k 上传 → Live → 24k 播放（前端 F6 + 联调）
+- [x] AudioWorklet → 16k 上传 → Live → 24k 播放（前端 F6 + 联调）——2026-06-07 验证：功能 PASS（vitest 73 绿 + lint + build + 前端真链路实测 + 后端两轮真冒烟联调）；review NEEDS-FIX 四警告已修（🟡W1 End 漏 flush 合批尾音→tee 截断 / 🟡W2 Safari 采样率钳制 2 倍速 / 🟡W3 PcmPlayer 零单测 / 🟡W4 合批续推用例），复验 **PASS**
 - [ ] PTT + 轮次结束
 - [x] 用户音频 tee + 帧时间戳（供回合切片，喂增量流水线）——2026-06-06 地板状态机切片（考官开口封片/turn_complete 开新片/interrupted 预缓冲回补）+ 切片即转写预上传，live 会话出真报告；真冒烟 band 6.0 + planted 错误捕获
 - [ ] 延迟徽章（PTT 以 turn_end 为准；自然模式最后非静音帧近似）
@@ -87,5 +87,6 @@
 2026-06-06 — P2 前三项完成并勾选：WS 代理提交 + interrupted/turn_complete/session_started 事件转发 + 连接参数校验（mode/case/turn ↦ sessions 落库）+ end_session 瞬时调度 finalize（回调在消费控制消息当下建独立 task，不依赖断连后协程存活）；pytest 90 绿 + 真冒烟（真 Live：session_started 首发·双向转写·387KB 下行音频·turn_complete 到达·end_session 后状态离开 recording）+ review PASS（W1/W3/W4/S1-S3 已修）/ 无阻塞 / 下次从 P2 第 4 项（前端 F6 联调）或音频 tee + 帧时间戳开始
 2026-06-06 — P2 第 6 项 tee 完成并勾选：UserAudioTee 地板状态机（流位置时钟=字节推导；考官首帧封片 / turn_complete 开新片 / interrupted 2s 预缓冲回补打断起头 / finish 封口闸门防 drain 漏片）+ save_clip 裸 PCM 封 WAV + drain 排干再 finalize；pytest 101 绿 + 真冒烟（live 会话出真报告：band 6.0·planted 主谓错误捕获·turns ts/file_uri 落库·TTR 回填一致）+ review PASS（W1-W4/S1-S3 已修）；期间 judge 上游偶发 503 会直接 failed（无重试，记 P8 缓冲考虑）/ 下次从 F6 联调或 PTT + 轮次结束开始
 2026-06-07 — P2 联调修缮（前端 F6 回执 4 条 + judge 503）：end_session 瞬间置 processing（修契约外过渡态）、零切片弃局删孤儿行（StrictMode 双连接）、connect_live 建链 OSError 重试一次（真实 TLS reset 场景验证触发）、judge 上游 5xx 按 (2,5)s 退避重试、APP_RELOAD 可配（联调防热重载杀会话）、SCHEMA §6.3 status 枚举对齐现实现；pytest 110 绿 + 修缮冒烟两项 PASS + review PASS / judge 上游持续高负载时重试耗尽仍诚实 failed / 下次从 F6 功能验证 + review（勾选 P2 第 4 项）或 PTT 开始
+2026-06-07 — P2 第 4 项 F6 分轨验收完成并勾选：功能验证 PASS（vitest 73 绿 + lint + build + 前端真链路实测 + 后端两轮真冒烟）；独立 review NEEDS-FIX 四警告（W1 End 漏 flush 合批尾音→tee 截最后一段语音 / W2 Safari 采样率钳制 2 倍速 / W3 PcmPlayer 零单测 / W4 合批续推用例）已按 P0 先例在前端工作树代修，复验 PASS；交接 handoff/inbox/003 待前端 review 后随其轨道提交 / 下次从 PTT + 轮次结束开始
 
 

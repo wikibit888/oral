@@ -2,7 +2,7 @@
 
 > 跨会话的唯一进度真相源。**开工先读本文件**对齐进度，**收工更新**勾选已完成项、记一行进度日志。状态：`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成。
 > 阶段与时长参考 `docs/PRD.md` §10「24 小时施工计划」。
-> **前端分轨**：前端各项（P0 React 骨架、P3 前端浮层、P4 录音页/选择页、P5 case 选择页、P6 报告页/曲线）由用户在 `TODO.frontend.md` 单独跟踪，本文件不勾前端项；前后端契约见 `docs/FRONTEND_HANDOFF.md`。
+> **前端分轨**：前端各项（P0 React 骨架、P3 前端浮层、P4 录音页/选择页、P5 case 选择页、P6 报告页/曲线）的**实现**由用户在 `TODO.frontend.md` 单独跟踪；本文件侧对前端项做**功能验证 + code review**，两者通过后方可勾选。前后端契约见 `docs/FRONTEND_HANDOFF.md`。
 
 ## 里程碑关卡
 
@@ -15,7 +15,7 @@
 - [x] 仓库初始化 / uv + pyproject / .env.example
 - [x] Gemini Live "hello" 单次语音往返（`gemini_live.py`）
 - [x] FastAPI 后端骨架
-- [ ] React 前端骨架（→ `TODO.frontend.md` 跟踪，本文件不勾）
+- [ ] React 前端骨架（实现归用户 / `TODO.frontend.md`；此处勾选 = 功能验证 + code review 通过）
 - [x] SQLite 初始化 + 表结构（sessions / turns / reports）
 
 ### P1 录音—评流水线 ★（~6h，护城河）

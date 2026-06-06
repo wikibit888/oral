@@ -41,7 +41,7 @@
 - [ ] 前端浮层：cue card + 倒计时 + 笔记 + "我准备好了"
 
 ### P4 方式 B + 模式选择（~1.5h）
-- [ ] 数据模型升级：`settings` 表（target_band）+ `sessions.is_seed` + status 枚举（SCHEMA §5.1）
+- [x] 数据模型升级：`settings` 表（target_band）+ `sessions.is_seed` + status 枚举（SCHEMA §5.1）——2026-06-07 PR #16：user_version 门控一次性迁移（done→completed/recording→live，防 P4c 后重启误迁）+ settings 单行表 + crud target_band；review C1→修→复审 PASS；**BREAKING：GET /reports status 改名，待统一 handoff 前端**
 - [ ] 会话化接口：`POST /sessions` → 逐题 `POST /sessions/{id}/recordings` → `POST /sessions/{id}/review`（Get Review 触发 judge）→ `DELETE /sessions/{id}`（Give Up 物理删除）；取代旧一次性 `POST /recordings`（SCHEMA §6.2）
 - [ ] judge 按 sub_mode 区分：方式 B 注入 descriptor 按 Part 侧重诊断（含发音），**不出数字 band**（dimensions / overall_band 置空）
 - [x] 静态题库 `data/questions.json`（p1/p2/p3 多题）+ `GET /questions?part=`——2026-06-07 PR #15：p1×8/p2×8/p3×8，tts_url 按文件存在性逐请求回填（TTS 落地免重启），/static/tts 挂载随行；review NEEDS-FIX(C1+W1-W5)→全修

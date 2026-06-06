@@ -1,70 +1,71 @@
 # CLAUDE.md
 
-> 本文件给本仓库的 Claude Code 定项目级约束。进度跟踪见根目录 `TODO.md`；完整产品需求见 `docs/PRD.md`，PR 规范见 `docs/PR.md`（`docs/` 已被 `.gitignore` 忽略，仅作本地上下文）。
+> Project-level rules for Claude Code in this repo. Progress source of truth: root `TODO.md`. Full context in `docs/` (gitignored, local-only): `PRD.md` (product core: positioning / feature list / user flows / delivery plan), `IELTS.md` (IELTS mode A/B detail), `SCENARIO.md` (scenario mode detail), `FRONTEND.md` (frontend design + WS/HTTP event contract), `SCHEMA.md` (tech stack / directory / architecture / **full API surface** / data model), `PR.md` (PR rules), `TEST.md` (known hazards).
 
-## 工作流程（每次必做）
+## What this is
 
-跨会话进度靠根目录 `TODO.md` 维持，**它是唯一进度真相源**。
+AI English speaking coach — a solo, 24h-deliverable **local demo**. Fills the gap between Duolingo (no real speaking) and human tutors (costly, stressful): zero-pressure, on-demand, immersive speaking practice.
 
-1. **开工先读** `TODO.md` 对齐当前进度，确认本次从哪个任务开始；必要时回看 `docs/PRD.md` 对应章节。
-2. 开工**先汇报**：用一两句说清「上次进度 + 本次计划做什么」，再动手。
-3. **收工更新** `TODO.md`：勾选已完成项（`[x]`）、标进行中（`[~]`），并在「进度日志」追加一行 `YYYY-MM-DD — 做了什么 / 卡在哪 / 下次从哪开始`。
-4. 完成一个功能点（对应一个 PR）后即时更新，不要攒到最后。
+**One engine, two modes.** The evaluation pipeline (whisper → objective signals → structured LLM judge → report) is fully shared and runs incrementally during the session — report visible ≤5s after session end. Modes differ only in persona prompt, flow, and whether a band is produced.
 
-## 项目是什么
+| Mode | Flow | Output |
+|---|---|---|
+| **IELTS** | A: mock exam (live, P1→P2→P3, director state machine) / B: per-Part recording, multi-question, one report per Part | A: official 4-dim band + diagnostics; B: descriptor-aligned diagnostics, **no band** |
+| **Scenario** | Multiple cases (ordering, meeting), **live conversation**, manual End; one persona + judge prompt each | Diagnostic text feedback, **no band** |
 
-AI 英语口语陪练 —— 单人 24 小时可交付的**本地 demo**。补在 Duolingo（不练真开口）与真人外教（贵、有压力）之间的口语训练场。
+Frontend: top nav **Practice** (hover dropdown IELTS/Scenario) / **Library** (session history) / **Review** (progress panel), hidden during sessions; processing state and report share one route (`/report/{id}`). Buttons in simple English. See `FRONTEND.md`.
 
-**一套引擎，两个模式**：课后评测引擎（whisper 转写 → 客观信号 → 结构化 LLM judge → 报告）完全复用；模式差异只在 persona prompt、流程，以及是否出 band。
+## Architecture
 
-- **雅思**：方式 A 模拟考试（实时对话）/ 方式 B 分模块（按 Part 录音）；产出官方四维 band + 诊断层。
-- **情景对话**：多 case（先做点餐 + 会议）；只给诊断式文字反馈，**无 band**。
-
-## 技术栈
-
-- 后端：Python **3.12**（用 **uv** 管理），FastAPI，`google-genai` 异步 SDK 接 Gemini Live，`faster-whisper` 转写。
-- 前端：React（图表用 recharts）。
-- 存储：SQLite，**单写死 demo 用户**（无账号 / 多用户）。
-- 音频规范（固定，免转码）：麦克风输入 **16kHz / 16-bit / 单声道 PCM**；Live 输出 **24kHz PCM**。
-
-## 常用命令
-
-```bash
-uv sync                 # 安装依赖
-uv run python main.py   # 运行入口
-uv run python gemini_live.py   # Gemini Live 最简语音往返 demo
-cp .env.example .env    # 配置 GEMINI_API_KEY（必填）、GEMINI_PROXY（可选）
+```
+mic (16k PCM)
+  ├─ live path (IELTS Mode A + Scenario): browser ⇄ WS /ws/live ⇄ FastAPI proxy ⇄ Gemini Live
+  │                                   └─ tee user audio + frame timestamps → per-turn clips
+  └─ recording path (Mode B only, NO Live): POST /sessions → per-question
+                     POST /sessions/{id}/recordings → POST /sessions/{id}/review (Get Review)
+                          ↓
+   evaluation pipeline — shared by all 3 entries; whisper + signals run incrementally
+   per turn/question DURING the session, clips pre-uploaded to Files API:
+     faster-whisper (word timestamps) → objective signals (deterministic)
+     → structured judge (ONE call after session end: 2–3 longest user clips
+       + signals JSON + transcript + mode prompt)
+     → report visible ≤5s (+ 4-dim band, IELTS Mode A only) → progress curve (SQLite)
 ```
 
-密钥只放 `.env`（已忽略），**禁止把 key 写进代码或提交**。
+Key judgments: only Mode B is Live-independent — if Live fails, Mode A and Scenario **error out (no fallback)**; Mode B + the full evaluation pipeline still work end-to-end. We wrap Live ourselves so we can tee raw mic audio for scoring. Full API surface (sessions / reports / progress / settings / questions, plus the `ielts_questions` extension) lives in `SCHEMA.md` §6–§7; WS events (incl. `session_started` / `interrupted` / `turn_complete`) in `FRONTEND.md` §5.
 
-## 架构铁律（不可违背）
+## Tech stack
 
-1. **对话中不打断，所有评测与纠错在课后呈现** —— 保住沉浸感与自然度。
-2. **课后流水线被三入口共用，且录音—评路径不依赖 Live**。雅思方式 B + 情景对话 + 全部评测，即便 Live 集成失败也必须完整可用；Live 只是方式 A 的实时性增强。
-3. **band 只在雅思场景有意义**。情景对话**不进 band 路径、不出总分**，只走诊断层 + 流利度指标。
-4. **客观信号是 judge 的输入，不是最终成绩**。
+- **Backend**: Python **3.12** (managed by **uv**), FastAPI, `google-genai` async SDK (Gemini Live / judge / TTS), `faster-whisper` for transcription.
+- **Frontend**: React + Vite (charts via recharts).
+- **Storage**: SQLite, **single hardcoded demo user** (no accounts / multi-user).
+- **Audio** (fixed, no transcoding): mic in **16kHz / 16-bit / mono PCM**; Live out **24kHz PCM**.
+- **TTS**: Gemini TTS **pre-generated** question audio (via seed script), zero runtime calls.
 
-## 评测约束（护城河，防漂移 / 防幻觉）
+## Commands
 
-- judge 调用一律 **temperature=0 + 结构化输出**。
-- **evidence 必须逐字引证考生原话**；引不出原话就不下判断（掐死幻觉、压方差）。
-- 目标：同段录音多次评分每维 **band std ≤ 0.5**。
-- **禁止把"像母语度"分数直接映射为发音 band**。发音按 IELTS 可懂度（intelligibility）rubric 由多模态 LLM 判；band descriptor 存 `band_descriptors.md` 运行时注入，换版本只改数据文件，不硬编码。
-- 雅思总分 = 四维平均四舍五入到最近 0.5；情景对话不聚合。
-- **一次 judge 调用产出整份报告**（音频切片 + 客观信号 JSON + transcript + 模式 prompt），丰富度高但不增调用。
-- 加情景 case = 新写一段 judge prompt，**不碰代码**。
+```bash
+uv sync                        # install deps
+uv run python main.py          # run entrypoint
+uv run python gemini_live.py   # minimal Gemini Live round-trip demo
+uv run pytest                  # tests
+cp .env.example .env           # set GEMINI_API_KEY (required), GEMINI_PROXY (optional)
+cd frontend && npm run dev     # frontend dev server (proxy /api → :8000); npm test / npm run build
+```
 
-## 范围边界（主动不做）
+Secrets live in `.env` (gitignored) only — **never** commit keys or write them into code.
 
-第三方发音 API（Azure / SpeechSuper，列为 stretch）、账号 / 多用户、定价 / 成本封顶、托福、原生 App、会话内"重答对比"。seed 数据须在 UI 与文档**诚实标注为演示数据**。
+## Workflow (per PR)
 
-## PR 工作流（强约束，详见 `docs/PR.md`）
+The main session is **orchestrator + implementer**. It owns the plan and the tight edit→test loop; it only hands off for independent review (`code-reviewer`) and noisy searches (`Explore`). `TODO.md` is the single source of truth for progress.
 
-1. **一切新功能都通过 PR**，不直接向 `main` 推送。
-2. **每个 PR 只做一件事**，小而聚焦；大功能先拆成多个独立 PR。无关的格式调整 / 重构 / 依赖升级**另开 PR**。
-3. **合并后 `main` 必须始终可运行**、能复现演示。
-4. 从最新 `main` 切分支，命名体现改动：`feature/xxx`、`fix/xxx`。
-5. 提交前本地自测通过，给出可复现验证步骤。
-6. PR 描述必含三段：**功能描述 / 实现思路 / 测试方式**，缺一不可。
-7. 用户请求实际含多个功能时**主动提示拆分**；执行推送 / 建 PR 等动作前**先说明并取得确认**。
+1. **READ**      open `TODO.md`; confirm the task and **scope it to one PR** (one thing only) — if the item spans multiple features, propose a split first and do them as separate PRs (`docs/PR.md`) → state "上次进度 + 本次 PR 做什么" (1–2 句)
+2. **EXPLORE**   (only if needed) spawn `Explore` agent for "where does X live / conventions"
+3. **BUILD**     code the ONE feature + unit tests — tight loop, main thread
+4. **SELF-TEST** `uv run pytest` until green
+5. **REVIEW**    `@agent-code-reviewer` (read-only) → PASS / NEEDS-FIX + findings
+6. **FIX**       fix findings on main thread; re-review only if NEEDS-FIX
+7. **CHECK**     user check — confirm all clean (not on `main` / `code-reviewer` PASS / tests green / one focused change, no unrelated edits / title + 两段正文 ready / main still runs after merge); tell user the edge cases + how to self-test → **wait for user OK**
+8. **PR**        `/pr` — drafts 标题 + 两段 body, then auto push → create PR → merge to main → sync (no second confirm)
+9. **LOG**       tick `TODO.md` + append 进度日志 line `YYYY-MM-DD — what / blocker / where to resume`
+

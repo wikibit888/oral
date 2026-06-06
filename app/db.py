@@ -63,23 +63,27 @@ def init_db() -> None:
 
 
 # 数据迁移版本（PRAGMA user_version）：每个一次性迁移占一个版本号，只升不降。
-_STATUS_ENUM_VERSION = 1
+_DATA_VERSION = 2
 
 
 def _migrate_status_enum_once(conn: sqlite3.Connection) -> None:
-    """status 枚举一次性迁移（SCHEMA §5.1）：done→completed、recording→live。
+    """status 枚举一次性迁移（SCHEMA §5.1），按 PRAGMA user_version 分步门控。
 
-    用 PRAGMA user_version 门控——**绝不能每次启动重跑**：会话化接口（P4c）
-    之后 recording 是方式 B 录音中的活跃态，重跑会把活跃行误迁成 live
-    （review C1）。版本 0 的库（升级前 recording 行全部来自 Live 会话）跑
-    一次后落版本号，之后永久跳过。
+    **绝不能每次启动重跑**（review C1）：会话化接口之后 recording 是方式 B
+    录音中的活跃态，重跑 v1 会把活跃行误迁成 live。每步只在低版本库上执行
+    一次，落版本号后永久跳过；版本号与 UPDATE 同事务原子提交。
     """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version >= _STATUS_ENUM_VERSION:
-        return
-    conn.execute("UPDATE sessions SET status='completed' WHERE status='done'")
-    conn.execute("UPDATE sessions SET status='live' WHERE status='recording'")
-    conn.execute(f"PRAGMA user_version = {_STATUS_ENUM_VERSION}")
+    if version < 1:
+        # v1（P4b）：done→completed；recording→live（当时 recording 全来自 Live 会话）
+        conn.execute("UPDATE sessions SET status='completed' WHERE status='done'")
+        conn.execute("UPDATE sessions SET status='live' WHERE status='recording'")
+    if version < 2:
+        # v2（P4c）：旧 POST /recordings 已移除，卡在 uploaded 的行（上传了但
+        # 流水线从未跑完）永远无人处理——诚实置 failed，不留前端无法渲染的死态
+        conn.execute("UPDATE sessions SET status='failed' WHERE status='uploaded'")
+    if version < _DATA_VERSION:
+        conn.execute(f"PRAGMA user_version = {_DATA_VERSION}")
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:

@@ -6,11 +6,9 @@
   whisper 转写 + Files API 预上传，产物挂 turns 行。用户继续说下一题时并行处理。
 - `finalize_session`：会话结束触发——转写已全部就绪，合并词序列 → 一次信号
   计算 → 一次 judge 调用 → 报告落库。
-- `process_session`：旧一次性入口（POST /recordings）的兼容封装：整段录音当
-  单切片 ingest + finalize，复用同一套增量机制。
 
 三入口（雅思 A / 方式 B / 情景）共用，仅方式 B 不依赖 Live（PRD §3）。
-状态机（SCHEMA §5.1）：live|recording|uploaded(过渡) → processing → completed | failed。
+状态机（SCHEMA §5.1）：live|recording → processing → completed | failed。
 """
 
 import logging
@@ -68,6 +66,8 @@ def finalize_session(session_id: str, *, sessions: int = 1) -> None:
     if session is None:
         raise ValueError(f"session 不存在: {session_id}")
 
+    # 双调用方：sessions review 入口已先行翻 processing（前端即刻轮询），此处
+    # 重复置位无害；Live 路径（end_session 回调）则依赖这一行进入 processing。
     crud.update_session_status(session_id, "processing")
     try:
         rows = crud.list_processed_user_turns(session_id)
@@ -103,29 +103,6 @@ def finalize_session(session_id: str, *, sessions: int = 1) -> None:
         # DB 出错，异常上抛、状态停在 processing，绝不把已落库的完整报告误标
         # failed 被 GET /reports 屏蔽。
         crud.update_session_status(session_id, "completed")
-
-
-def process_session(session_id: str) -> None:
-    """旧一次性入口（POST /recordings）：整段录音当单切片走增量机制。
-
-    重跑幂等：先清掉旧 turns 再 ingest（reports 落库本身 INSERT OR REPLACE）。
-    """
-    session = crud.get_session(session_id)
-    if session is None:
-        raise ValueError(f"session 不存在: {session_id}")
-    if not session["audio_path"]:
-        raise ValueError(f"session 无音频，无法处理: {session_id}")
-
-    crud.update_session_status(session_id, "processing")
-    try:
-        crud.delete_turns(session_id)
-        ingest_clip(session_id, session["audio_path"])
-    except Exception:
-        crud.update_session_status(session_id, "failed")
-        logger.exception("评测流水线 ingest 失败: session=%s", session_id)
-        raise
-    # finalize 自带完整的 try/except/else 状态机（failed / completed），无需在此包裹。
-    finalize_session(session_id)
 
 
 def merge_transcripts(transcripts: list[Transcript]) -> Transcript:

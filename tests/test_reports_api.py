@@ -1,10 +1,7 @@
-"""HTTP 层单测：GET /reports/{id} 轮询契约 + POST /recordings 触发后台流水线。
+"""HTTP 层单测：GET /reports/{id} 轮询契约。
 
 DB 用临时文件；流水线被 mock，不跑真 whisper/Gemini。
 """
-
-import io
-import wave
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,16 +24,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "audio_dir", str(tmp_path / "audio"))
     with TestClient(app) as c:
         yield c
-
-
-def _wav_bytes(seconds=1.0, rate=16000) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(b"\x00\x00" * int(rate * seconds))
-    return buf.getvalue()
 
 
 def _report_json() -> str:
@@ -94,20 +81,3 @@ def test_get_report_completed_but_no_report_row(client):
     body = client.get("/reports/d2").json()
     assert body["status"] == "completed"
     assert body["report"] is None
-
-
-def test_post_recording_schedules_pipeline(client, monkeypatch):
-    calls = []
-    # 拦截后台流水线，避免跑真 whisper/Gemini，只验证被调度
-    monkeypatch.setattr("app.api.recordings.process_session", lambda sid: calls.append(sid))
-
-    r = client.post(
-        "/recordings",
-        files={"audio": ("a.wav", _wav_bytes(), "audio/wav")},
-        data={"mode": "ielts", "sub_mode": "module_p2"},
-    )
-    assert r.status_code == 201
-    body = r.json()
-    assert body["status"] == "uploaded"
-    # 后台任务在响应后执行，TestClient 会等其跑完
-    assert calls == [body["id"]]

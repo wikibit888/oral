@@ -1,7 +1,7 @@
 """FastAPI 应用工厂：装配中间件与路由，导出 `app` 供 uvicorn 加载。
 
-已挂载课后录音—评流水线（POST /recordings、GET /reports/{id}）
-与实时对话 WS 代理（/ws/live）。
+已挂载方式 B 会话化接口（POST /sessions 族）、报告查询（GET /reports/{id}）、
+题库（GET /questions）与实时对话 WS 代理（/ws/live）。
 """
 
 from contextlib import asynccontextmanager
@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.health import router as health_router
 from app.api.live_ws import router as live_ws_router
 from app.api.questions import TTS_DIR, TTS_URL_PREFIX, router as questions_router
-from app.api.recordings import router as recordings_router
+from app.api.sessions import router as sessions_router
 from app.api.reports import router as reports_router
 from app.config import settings
 from app.db import init_db
@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router)
-    app.include_router(recordings_router)
+    app.include_router(sessions_router)
     app.include_router(reports_router)
     app.include_router(live_ws_router)
     app.include_router(questions_router)

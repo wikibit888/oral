@@ -14,6 +14,7 @@
 import asyncio
 import logging
 from contextlib import suppress
+from typing import Any, Coroutine
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -31,9 +32,15 @@ router = APIRouter(tags=["live"])
 VALID_TURN_MODES = {"ptt", "natural"}
 VALID_SCENARIO_CASES = {"ordering", "meeting"}
 
-# fire-and-forget 的 finalize 任务持强引用：事件循环只持弱引用，
-# 不留住会被 GC 中途掐掉（Python 文档明示的 create_task 陷阱）。
-_finalize_tasks: set[asyncio.Task] = set()
+# fire-and-forget 的后台任务（finalize / 孤儿清理）持强引用：事件循环只持
+# 弱引用，不留住会被 GC 中途掐掉（Python 文档明示的 create_task 陷阱）。
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro: Coroutine[Any, Any, Any]) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None]:
@@ -72,10 +79,14 @@ async def live_ws(websocket: WebSocket) -> None:
             await websocket.close()
         return
 
+    session_id: str | None = None
+    tee: UserAudioTee | None = None
+    ended = False
     try:
         async with connect_live() as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的
-            # 会话停在 recording 态，不触发 judge（契约：仅 end_session 触发）。
+            # 会话不触发 judge（契约：仅 end_session 触发）：说过话的停在
+            # recording 态留素材，零切片的在 finally 里清掉。
             session_id = crud.create_session(
                 session_id=uuid4().hex,
                 mode=mode,
@@ -96,6 +107,11 @@ async def live_ws(websocket: WebSocket) -> None:
             tee = UserAudioTee(session_id)
 
             def _on_end_session() -> None:
+                nonlocal ended
+                ended = True
+                # 立即翻转 processing：drain/ingest 在途窗口里前端已开始轮询，
+                # 不能让它看到契约外的过渡态卡住（联调发现①）
+                crud.update_session_status(session_id, "processing")
                 tee.finish()
                 _schedule_finalize(tee, session_id)
 
@@ -115,15 +131,19 @@ async def live_ws(websocket: WebSocket) -> None:
                 {"type": "error", "message": "实时会话异常，请重试。"}
             )
     finally:
+        # 弃局且一个切片都没切出（React StrictMode 双连接的首条、误点进入等）
+        # → 删孤儿行（联调发现③）。零切片 = 从未发起 ingest，删行无竞态。
+        # 放在 close 之前：本协程可能已被取消，close 的 await 点会再抛
+        # CancelledError 中断 finally，先把清理任务同步调度出去。
+        if session_id is not None and not ended and (tee is None or tee.clip_count == 0):
+            _schedule_orphan_cleanup(session_id)
         with suppress(Exception):
             await websocket.close()
 
 
 def _schedule_finalize(tee: UserAudioTee, session_id: str) -> None:
     """调度课后收口为独立 task：先排干切片 ingest，再跑一次 judge。"""
-    task = asyncio.create_task(_drain_and_finalize(tee, session_id))
-    _finalize_tasks.add(task)
-    task.add_done_callback(_finalize_tasks.discard)
+    _spawn_background(_drain_and_finalize(tee, session_id))
 
 
 async def _drain_and_finalize(tee: UserAudioTee, session_id: str) -> None:
@@ -137,3 +157,18 @@ def _run_finalize(session_id: str) -> None:
     # finalize_session 自带 failed 状态机 + 异常日志；这里吞掉防 task 留未取异常
     with suppress(Exception):
         finalize_session(session_id)
+
+
+def _schedule_orphan_cleanup(session_id: str) -> None:
+    """后台删除零切片弃局的孤儿会话行。"""
+    _spawn_background(asyncio.to_thread(_cleanup_orphan, session_id))
+
+
+def _cleanup_orphan(session_id: str) -> None:
+    try:
+        session = crud.get_session(session_id)
+        # 再核一遍状态：只删仍停在 recording 的行，绝不误删已进评测的会话
+        if session is not None and session["status"] == "recording":
+            crud.delete_session(session_id)
+    except Exception:
+        logger.exception("孤儿会话清理失败: session=%s", session_id)

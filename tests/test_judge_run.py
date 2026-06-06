@@ -8,6 +8,7 @@ practice_summary / overall_band / unscorable* / vocabulary_diversity_pct
 import json
 
 import pytest
+from google.genai import errors
 
 from app.judge import run as judge_run
 from app.judge.aggregate import aggregate_overall_band, round_to_half
@@ -307,3 +308,68 @@ def test_upload_clip_returns_uri(monkeypatch):
     fake = type("C", (), {"files": _Files()})()
     monkeypatch.setattr(judge_run, "_client", lambda: fake)
     assert judge_run.upload_clip("/a.wav") == "files/xyz"
+
+
+# —— judge 上游 5xx 重试（联调修缮）—— #
+def _server_error() -> errors.ServerError:
+    return errors.ServerError(
+        503,
+        {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}},
+        None,
+    )
+
+
+def test_judge_retries_transient_5xx(monkeypatch, caplog):
+    # 前 2 次 503、第 3 次成功：按退避序列重试后正常出报告（temp=0 重试无漂移）
+    fake = _patch(monkeypatch, _judged(_dims()))
+    calls = {"n": 0}
+    orig = fake.models.generate_content
+
+    def flaky(*, model, contents, config):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise _server_error()
+        return orig(model=model, contents=contents, config=config)
+
+    monkeypatch.setattr(fake.models, "generate_content", flaky)
+    monkeypatch.setattr(judge_run.time, "sleep", lambda s: None)  # 不真等退避
+
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert calls["n"] == 3
+    assert rep.overall_band == 6.5
+    assert "judge 上游 5xx" in caplog.text
+
+
+def test_judge_5xx_exhausts_then_raises(monkeypatch):
+    # 重试耗尽（1 + len(backoff) 次）仍 5xx → 上抛，由 pipeline 置 failed
+    fake = _patch(monkeypatch, _judged(_dims()))
+    calls = {"n": 0}
+
+    def always_503(*, model, contents, config):
+        calls["n"] += 1
+        raise _server_error()
+
+    monkeypatch.setattr(fake.models, "generate_content", always_503)
+    monkeypatch.setattr(judge_run.time, "sleep", lambda s: None)
+
+    with pytest.raises(errors.ServerError):
+        judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert calls["n"] == 1 + len(judge_run.JUDGE_RETRY_BACKOFF_S)
+
+
+def test_judge_4xx_not_retried(monkeypatch):
+    # 4xx（配额/参数错）重试无意义：立刻上抛
+    fake = _patch(monkeypatch, _judged(_dims()))
+    calls = {"n": 0}
+
+    def quota_error(*, model, contents, config):
+        calls["n"] += 1
+        raise errors.ClientError(
+            429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, None
+        )
+
+    monkeypatch.setattr(fake.models, "generate_content", quota_error)
+
+    with pytest.raises(errors.ClientError):
+        judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert calls["n"] == 1

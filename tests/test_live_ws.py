@@ -9,6 +9,7 @@ interrupted / turn_complete 事件转发、end_session 收束并触发课后 fin
 import asyncio
 import json
 import threading
+import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -89,7 +90,7 @@ def no_finalize(monkeypatch):
     monkeypatch.setattr("app.live.tee.ingest_clip", lambda *a, **kw: None)
     yield
     # 模块级任务集是跨测试的进程态，清掉防慢任务句柄漏到下个用例（review S3）
-    live_ws_module._finalize_tasks.clear()
+    live_ws_module._background_tasks.clear()
 
 
 def _patch_session(monkeypatch, session) -> None:
@@ -417,4 +418,46 @@ def test_client_disconnect_does_not_trigger_finalize(client, monkeypatch):
 
     assert len(session.sent) == 1
     assert not called.wait(timeout=0.3)  # 中途断开不触发 judge（仅 end_session 触发）
-    assert crud.get_session(session_id)["status"] == "recording"  # 弃局停在 recording
+    # 零切片弃局（StrictMode 双连接等）→ 孤儿行被后台清理（联调发现③）
+    deadline = time.monotonic() + 3
+    while crud.get_session(session_id) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert crud.get_session(session_id) is None, "孤儿行应在 3s 内被后台清理删除"
+
+
+def test_disconnect_with_clips_keeps_session_row(client, monkeypatch):
+    # 说过话（已切出切片）的弃局会话保留素材，停在 recording 不触发 judge
+    half_sec = b"\x01" * 16000
+    session = TriggeredFakeLiveSession(
+        responses=[_audio_resp(b"\x0a")],     # 考官开口 → 封切片1
+        trigger_bytes=len(half_sec),
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        session_id = ws.receive_json()["session_id"]
+        ws.send_bytes(half_sec)
+        assert ws.receive_bytes() == b"\x0a"  # 切片已切出（clip_count=1）
+    # 断开（未发 end_session）
+
+    time.sleep(0.3)                           # 给孤儿清理任务一个误删的机会窗口
+    row = crud.get_session(session_id)
+    assert row is not None and row["status"] == "recording"
+
+
+def test_end_session_flips_status_to_processing_immediately(client, monkeypatch):
+    # 联调发现①：End 后前端立刻轮询 /reports，drain/ingest 在途窗口里
+    # 状态必须已是 processing（finalize 被打桩成 no-op，不会再推进状态）
+    _patch_session(monkeypatch, FakeLiveSession(responses=[]))
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        session_id = ws.receive_json()["session_id"]
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    deadline = time.monotonic() + 3
+    while (
+        crud.get_session(session_id)["status"] != "processing"
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.05)
+    assert crud.get_session(session_id)["status"] == "processing"

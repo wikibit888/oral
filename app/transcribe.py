@@ -6,28 +6,12 @@
 - 模型懒加载 + 进程内单例，首次调用自动下载权重（默认 small，见 config）。
 """
 
-from dataclasses import dataclass
 from functools import lru_cache
 
 from faster_whisper import WhisperModel
 
 from app.config import settings
-
-
-@dataclass
-class Word:
-    word: str
-    start: float
-    end: float
-    probability: float
-
-
-@dataclass
-class Transcript:
-    text: str
-    language: str
-    duration: float
-    words: list[Word]
+from app.models import Transcript, Word
 
 
 @lru_cache(maxsize=1)

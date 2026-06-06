@@ -17,6 +17,7 @@ from app import crud
 from app.judge.run import run_judge, upload_clip
 from app.models import AudioClip, Transcript, Word, transcript_from_json, transcript_to_json
 from app.report import Report
+from app.scenario_cases import judge_focus
 from app.signals import ObjectiveSignals, compute_signals
 from app.transcribe import transcribe
 
@@ -90,6 +91,8 @@ def finalize_session(session_id: str, *, sessions: int = 1) -> None:
             clips=clips,
             sub_mode=session["sub_mode"],
             scenario_case=session["scenario_case"],
+            # 情景 case 侧重段（注册表查得；非情景 / 未知 case 为 None，prompt 层降级占位）
+            case_prompt=judge_focus(session["scenario_case"]),
             sessions=sessions,
             recordings=len(rows),
         )

@@ -22,6 +22,7 @@ from app.config import settings
 from app.db import get_connection
 from app.live.client import AUDIO_MIME
 from app.main import app
+from app.scenario_cases import CASES as SCENARIO_CASES
 
 
 def _sc(**overrides):
@@ -165,7 +166,8 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
 
 @pytest.mark.parametrize("case", ["ordering", "meeting"])
 def test_session_started_creates_scenario_row(client, monkeypatch, case):
-    _patch_session(monkeypatch, FakeLiveSession(responses=[]))
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
 
     with client.websocket_connect(f"/ws/live?mode=scenario&case={case}&turn=ptt") as ws:
         event = ws.receive_json()
@@ -177,6 +179,9 @@ def test_session_started_creates_scenario_row(client, monkeypatch, case):
     assert row["mode"] == "scenario"
     assert row["sub_mode"] is None
     assert row["scenario_case"] == case
+    # 情景建链注入该 case 的角色 persona；无导演状态机 → 零导演提示
+    assert session.system_instruction == SCENARIO_CASES[case].persona
+    assert session.directions == []
 
 
 def test_create_session_failure_reports_error(client, monkeypatch):

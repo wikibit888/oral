@@ -22,16 +22,19 @@ from app.live.client import AUDIO_MIME
 logger = logging.getLogger(__name__)
 
 
-async def bridge(websocket, session, *, on_end_session=None) -> None:
+async def bridge(websocket, session, *, tee=None, on_end_session=None) -> None:
     """并发跑上行 / 下行两个泵，任一结束就取消另一个；泵内异常向上抛。
 
+    tee：用户音频分叉器（app/live/tee.py，鸭子类型）。泵内在对应位置同步调
+    钩子：上行帧 on_user_frame、下行音频 on_model_audio、事件 on_interrupted /
+    on_turn_complete——切片的轮次边界与发给前端的事件天然同一来源。
     on_end_session：消费到 end_session 的瞬间在上行泵内同步回调（无 await 点），
     是「会话正常收束」的唯一信号（客户端断开 / Live 流自行结束都不会触发）。
-    调用方用它调度课后 judge——前端发完 end_session 可能立即断开并跳报告页，
-    本协程随时会被取消，收束后的代码不保证执行，故不能把触发放在 bridge 之后。
+    调用方用它收尾 tee 并调度课后 judge——前端发完 end_session 可能立即断开并
+    跳报告页，本协程随时会被取消，收束后的代码不保证执行，故不能放在 bridge 之后。
     """
-    up = asyncio.create_task(_pump_upstream(websocket, session, on_end_session))
-    down = asyncio.create_task(_pump_downstream(websocket, session))
+    up = asyncio.create_task(_pump_upstream(websocket, session, tee, on_end_session))
+    down = asyncio.create_task(_pump_downstream(websocket, session, tee))
     try:
         done, _ = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
     finally:
@@ -45,8 +48,8 @@ async def bridge(websocket, session, *, on_end_session=None) -> None:
             raise exc
 
 
-async def _pump_upstream(websocket, session, on_end_session=None) -> None:
-    """浏览器 → Live：二进制音频帧转发；文本按控制消息处理。
+async def _pump_upstream(websocket, session, tee=None, on_end_session=None) -> None:
+    """浏览器 → Live：二进制音频帧转发（tee 同步分叉）；文本按控制消息处理。
 
     收到 end_session 先回调 on_end_session 再返回；客户端断开直接返回。
     """
@@ -55,6 +58,8 @@ async def _pump_upstream(websocket, session, on_end_session=None) -> None:
         if message["type"] == "websocket.disconnect":
             return
         if (data := message.get("bytes")) is not None:
+            if tee is not None:
+                tee.on_user_frame(data)
             await session.send_realtime_input(
                 audio=types.Blob(data=data, mime_type=AUDIO_MIME)
             )
@@ -78,15 +83,20 @@ def _handle_control(text: str) -> bool:
     return False
 
 
-async def _pump_downstream(websocket, session) -> None:
+async def _pump_downstream(websocket, session, tee=None) -> None:
     """Live → 浏览器：音频字节直发 binary；双向转写发 transcript_delta 事件。
 
     session.receive() 的迭代器在一轮结束后耗尽，外层 while True 续接下一轮
     （与 gemini_live.py demo 同模式）。
     """
+    # tee 钩子一律在 await 发送之前调：钩子只动内存、无 await 点，保证切片
+    # 边界状态先于事件落定——若放在 send 之后，send 让出控制权的窗口里上行泵
+    # 可能已处理新帧，边界就漂了。
     while True:
         async for response in session.receive():
             if response.data:
+                if tee is not None:
+                    tee.on_model_audio()    # 考官开口 = 用户切片的轮次边界
                 await websocket.send_bytes(response.data)
             sc = response.server_content
             if sc is None:
@@ -105,7 +115,11 @@ async def _pump_downstream(websocket, session) -> None:
             # 播放队列（FRONTEND §5）。放在音频之后发：同一响应里残留的旧回合
             # 音频字节先入队、随即被这条事件整体清掉，不会漏。
             if sc.interrupted:
+                if tee is not None:
+                    tee.on_interrupted()    # 地板归还用户 + 预缓冲回补打断起头
                 await websocket.send_json({"type": "interrupted"})
             # 考官回合结束（VAD/turn 边界）；PTT 模式前端也靠它解锁下一次按键
             if sc.turn_complete:
+                if tee is not None:
+                    tee.on_turn_complete()  # 地板归还用户，开新切片
                 await websocket.send_json({"type": "turn_complete"})

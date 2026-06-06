@@ -31,7 +31,7 @@
 - [x] /ws/live 连接参数：`mode=ielts_a|scenario & case & turn=ptt|natural`；`end_session` 自动触发 judge——参数校验 + sessions 落库（status=recording）；turn=ptt 仅校验，turn_end 语义归「PTT + 轮次结束」项；tee 未接线前 finalize 无切片落 failed 属预期
 - [ ] AudioWorklet → 16k 上传 → Live → 24k 播放（前端 F6 + 联调）
 - [ ] PTT + 轮次结束
-- [ ] 用户音频 tee + 帧时间戳（供回合切片，喂增量流水线）
+- [x] 用户音频 tee + 帧时间戳（供回合切片，喂增量流水线）——2026-06-06 地板状态机切片（考官开口封片/turn_complete 开新片/interrupted 预缓冲回补）+ 切片即转写预上传，live 会话出真报告；真冒烟 band 6.0 + planted 错误捕获
 - [ ] 延迟徽章（PTT 以 turn_end 为准；自然模式最后非静音帧近似）
 
 ### P3 雅思方式 A（~3h）
@@ -85,5 +85,6 @@
 2026-06-06 — P0 全部完成并勾选：后端四项复验（pytest 61 绿 / FastAPI 冒烟 /health OK / SQLite 三表齐 / gemini_live.py 完好）；前端骨架 review findings C1/C2/W1/W4/W5/W6 修复（vitest 42 绿 + build + lint），code-reviewer 复审 PASS；统一 PR 提交 / 无阻塞 / 下次从 P1 增量流水线或 P2 事件转发补全开始
 2026-06-06 — P1 全部完成并勾选：增量流水线（ingest_clip/finalize_session/merge_transcripts + turns 落转写）、Files API 预上传 + 2–3 段最长切片、JudgeReport schema 收口（TTR 后端回填）、error_rate 落库；pytest 78 绿 + 真冒烟（真 whisper/Gemini/Files API，band 聚合·planted 错误·file_uri·error_rate 全验证）+ review PASS / 无阻塞 / 下次从 P2 事件转发补全（interrupted/turn_complete/session_started）开始
 2026-06-06 — P2 前三项完成并勾选：WS 代理提交 + interrupted/turn_complete/session_started 事件转发 + 连接参数校验（mode/case/turn ↦ sessions 落库）+ end_session 瞬时调度 finalize（回调在消费控制消息当下建独立 task，不依赖断连后协程存活）；pytest 90 绿 + 真冒烟（真 Live：session_started 首发·双向转写·387KB 下行音频·turn_complete 到达·end_session 后状态离开 recording）+ review PASS（W1/W3/W4/S1-S3 已修）/ 无阻塞 / 下次从 P2 第 4 项（前端 F6 联调）或音频 tee + 帧时间戳开始
+2026-06-06 — P2 第 6 项 tee 完成并勾选：UserAudioTee 地板状态机（流位置时钟=字节推导；考官首帧封片 / turn_complete 开新片 / interrupted 2s 预缓冲回补打断起头 / finish 封口闸门防 drain 漏片）+ save_clip 裸 PCM 封 WAV + drain 排干再 finalize；pytest 101 绿 + 真冒烟（live 会话出真报告：band 6.0·planted 主谓错误捕获·turns ts/file_uri 落库·TTR 回填一致）+ review PASS（W1-W4/S1-S3 已修）；期间 judge 上游偶发 503 会直接 failed（无重试，记 P8 缓冲考虑）/ 下次从 F6 联调或 PTT + 轮次结束开始
 
 

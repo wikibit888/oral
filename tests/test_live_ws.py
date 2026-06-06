@@ -83,8 +83,10 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_finalize(monkeypatch):
-    """默认掐掉课后 finalize（真实现要跑 whisper/judge）；专项测试自行覆盖。"""
+    """默认掐掉课后 finalize 与切片 ingest（真实现要跑 whisper/judge）；专项测试自行覆盖。"""
     monkeypatch.setattr("app.api.live_ws.finalize_session", lambda session_id: None)
+    monkeypatch.setattr("app.live.tee.save_clip", lambda sid, seq, pcm: f"/fake/{sid}_{seq}.wav")
+    monkeypatch.setattr("app.live.tee.ingest_clip", lambda *a, **kw: None)
     yield
     # 模块级任务集是跨测试的进程态，清掉防慢任务句柄漏到下个用例（review S3）
     live_ws_module._finalize_tasks.clear()
@@ -321,6 +323,83 @@ def test_end_session_triggers_finalize(client, monkeypatch):
     # finalize 在 WS 关闭后丢线程后台跑，等它落地
     assert called.wait(timeout=5), "end_session 后 finalize 未被触发"
     assert finalized == [session_id]
+
+
+class TriggeredFakeLiveSession(FakeLiveSession):
+    """收满 trigger_bytes 上行字节才放下行 canned responses——
+    保证「用户帧先到、考官才开口」的时序确定，消除两泵竞态。"""
+
+    def __init__(self, responses, trigger_bytes):
+        super().__init__(responses)
+        self._trigger_bytes = trigger_bytes
+        self._got = 0
+        self._event = asyncio.Event()
+
+    async def send_realtime_input(self, *, audio):
+        self.sent.append(audio)
+        self._got += len(audio.data)
+        if self._got >= self._trigger_bytes:
+            self._event.set()
+
+    def receive(self):
+        async def gen():
+            if self._first:
+                self._first = False
+                await self._event.wait()
+                for r in self._responses:
+                    yield r
+            else:
+                await asyncio.Event().wait()
+
+        return gen()
+
+
+def test_live_clips_ingested_then_finalized(client, monkeypatch):
+    # 全链路缩影：用户 0.5s → 考官音频（封切片1）→ turn_complete → 用户 0.5s
+    # → end_session（封切片2）→ 先排干两次 ingest，再 finalize
+    order: list[str] = []
+    clips: list[tuple] = []
+    finalize_done = threading.Event()
+    pcm_by_path: dict[str, bytes] = {}
+
+    def fake_save(session_id, seq, pcm):
+        path = f"/fake/{session_id}_turn{seq}.wav"
+        pcm_by_path[path] = pcm
+        return path
+
+    def fake_ingest(session_id, path, *, role="user", start_ts=None, end_ts=None):
+        order.append("ingest")
+        clips.append((len(pcm_by_path[path]), start_ts, end_ts))
+
+    def fake_finalize(session_id):
+        order.append("finalize")
+        finalize_done.set()
+
+    monkeypatch.setattr("app.live.tee.save_clip", fake_save)
+    monkeypatch.setattr("app.live.tee.ingest_clip", fake_ingest)
+    monkeypatch.setattr("app.api.live_ws.finalize_session", fake_finalize)
+
+    half_sec = b"\x01" * 16000  # 0.5s @ 16k/16-bit/mono
+    session = TriggeredFakeLiveSession(
+        responses=[
+            _audio_resp(b"\x0a"),
+            SimpleNamespace(data=None, server_content=_sc(turn_complete=True)),
+        ],
+        trigger_bytes=len(half_sec),
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        ws.receive_json()                          # session_started
+        ws.send_bytes(half_sec)                    # 第一轮用户音频
+        assert ws.receive_bytes() == b"\x0a"       # 考官开口 → 切片1 已封
+        assert ws.receive_json() == {"type": "turn_complete"}
+        ws.send_bytes(half_sec)                    # 第二轮用户音频
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert finalize_done.wait(timeout=5), "end_session 后未跑到 finalize"
+    assert order == ["ingest", "ingest", "finalize"]   # 先排干切片再收口
+    assert clips == [(16000, 0.0, 0.5), (16000, 0.5, 1.0)]
 
 
 def test_client_disconnect_does_not_trigger_finalize(client, monkeypatch):

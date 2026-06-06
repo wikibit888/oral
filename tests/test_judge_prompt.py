@@ -17,7 +17,7 @@ def test_band_descriptors_loaded():
 
 
 def test_ielts_prompt_injects_descriptor_and_grounding():
-    p = build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="module_p2")
+    p = build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="exam")
     # 注入官方 descriptor
     assert "IELTS Speaking Band Descriptors" in p
     # 四维齐全
@@ -110,3 +110,34 @@ def test_band_out_of_range_rejected():
             },
             diagnostics=_DIAGNOSTICS,
         )
+
+
+# —— 方式 B（module_pX）按 Part 侧重 + 不出数字 band —— #
+def test_ielts_b_prompt_descriptor_aligned_no_numeric_band():
+    from app.judge.prompt import build_judge_prompt
+
+    p = build_judge_prompt(
+        "ielts", transcript_text="t", signals={}, sub_mode="module_p2",
+    )
+    assert "方式 B" in p
+    assert "不展示数字 band" in p
+    assert "cue card 长谈" in p                       # Part 侧重注入
+    assert "Fluency" in p or "fluency" in p          # descriptor 仍注入（诊断对齐）
+    assert "内部诊断依据" in p
+
+
+def test_ielts_b_each_part_has_distinct_focus():
+    from app.judge.prompt import build_judge_prompt
+
+    p1 = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="module_p1")
+    p3 = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="module_p3")
+    assert "日常问答" in p1 and "抽象讨论" not in p1
+    assert "抽象讨论" in p3 and "日常问答" not in p3
+
+
+def test_ielts_exam_prompt_unchanged_band_flow():
+    from app.judge.prompt import build_judge_prompt
+
+    p = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="exam")
+    assert "按官方四维给 band" in p
+    assert "方式 B" not in p

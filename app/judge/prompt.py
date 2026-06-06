@@ -40,6 +40,48 @@ SCENARIO_INSTRUCTIONS = """\
 dimensions 与 overall_band 必须为 null；只产出诊断层 + 共享的客观流利度指标。\
 """
 
+# 方式 B 各 Part 的诊断侧重（IELTS.md §3：分模块练习，按 Part 特性给针对性反馈）
+MODULE_FOCUS = {
+    "module_p1": (
+        "Part 1（日常问答）侧重：是否直接回应问题、短答后能否自然扩展 2–3 句、"
+        "日常话题词汇的准确与自然度、问答节奏（避免背诵感）。"
+    ),
+    "module_p2": (
+        "Part 2（cue card 长谈）侧重：组织结构（开头点题—按 bullets 展开—收尾）、"
+        "1–2 分钟持续输出的连贯性（连接词多样性、避免 'and then' 串句）、"
+        "话题展开充分度、长独白中的时态一致。"
+    ),
+    "module_p3": (
+        "Part 3（抽象讨论）侧重：论证结构（观点—理由—例证）、抽象与学术词汇、"
+        "复杂句式（条件句 / 让步 / 定语从句）的准确使用、观点深度与平衡性。"
+    ),
+}
+
+
+def _ielts_b_instructions(sub_mode: str) -> str:
+    if sub_mode not in MODULE_FOCUS:   # 防御：仅 build_judge_prompt 守门，直调要快败
+        raise ValueError(f"非方式 B 的 sub_mode: {sub_mode!r}")
+    return f"""\
+模式：雅思方式 B（分模块练习，{sub_mode}）。**最终报告不展示数字 band**——
+分模块的单 Part 样本碎，数字 band 解释力弱，只给 descriptor 对齐的诊断反馈。
+
+四维仍按官方 descriptor 照常判定并填入 dimensions（band + evidence[逐字] +
+descriptor_match + suggestions）——这是**内部诊断依据**，系统会在最终报告里
+移除数字、只保留诊断层；若录音完全不可评（静音 / 非英语），dimensions 留空。
+pronunciation 按**可懂度（intelligibility）**从音频判，不按像母语度。
+
+诊断层是用户唯一可见的反馈，必须落到本 Part 的侧重点上：
+{MODULE_FOCUS[sub_mode]}
+top_priorities / suggestions 里可以引用 descriptor 的语言定位表现
+（如「fluency 表现接近 'willing to speak at length' 的水平，但…」）。
+dimensions 里的数字仅供系统内部使用，**绝不得出现在 top_priorities / suggestions /
+explanation 等任何诊断文本字段中**。
+
+对照下列官方 band descriptor 做诊断对齐：
+
+{load_band_descriptors()}\
+"""
+
 
 def _ielts_instructions() -> str:
     return f"""\
@@ -70,11 +112,17 @@ def build_judge_prompt(
 ) -> str:
     """组装一次 judge 调用的内容 prompt。
 
-    mode='ielts' 注入 band descriptor；mode='scenario' 注入 case prompt 且禁 band。
+    mode='ielts' 按 sub_mode 分流：exam（方式 A）注入 descriptor 出四维 band；
+    module_pX（方式 B）注入 descriptor 做诊断对齐 + Part 侧重，**不出数字 band**
+    （四维仍内部判定供系统检测 unscorable，最终报告由 run_judge 置空）。
+    mode='scenario' 注入 case prompt 且禁 band。
     case_prompt 为情景 case 侧重段（P5 写数据文件传入）；缺省时给占位提示。
     """
     if mode == "ielts":
-        mode_section = _ielts_instructions()
+        if sub_mode in MODULE_FOCUS:
+            mode_section = _ielts_b_instructions(sub_mode)
+        else:
+            mode_section = _ielts_instructions()
     elif mode == "scenario":
         focus = case_prompt or f"[CASE 侧重：{scenario_case} —— 详细 case prompt 在 P5 注入]"
         mode_section = f"{SCENARIO_INSTRUCTIONS}\n\nCase 侧重：\n{focus}"

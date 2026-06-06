@@ -21,6 +21,8 @@ from app.report import (
     JudgeReport,
     Report,
     SyntacticAnalysis,
+    TopPriority,
+    Rewrite,
 )
 from app.signals import compute_signals
 
@@ -104,7 +106,7 @@ def test_judge_schema_excludes_backfilled_fields():
 # —— run_judge —— #
 def test_ielts_temp0_schema_and_aggregation(monkeypatch):
     fake = _patch(monkeypatch, _judged(_dims()))
-    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p2")
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="exam")
     cfg = fake.models.last["config"]
     assert cfg.temperature == 0
     assert cfg.response_schema is JudgeReport
@@ -373,3 +375,61 @@ def test_judge_4xx_not_retried(monkeypatch):
     with pytest.raises(errors.ClientError):
         judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
     assert calls["n"] == 1
+
+
+# —— P4d：方式 B（module_pX）不出数字 band —— #
+def test_module_b_strips_dimensions_and_overall(monkeypatch):
+    # judge 内部照常判四维（诊断依据），最终报告必须剥掉数字 band；
+    # 诊断层有货 → 可评（review W2：必须断言内容非空，而非对象非 None）
+    judged = _judged(_dims())
+    judged.diagnostics.rewrites = [
+        Rewrite(original="I want learn", rewrite="I want to learn", reason="不定式")
+    ]
+    _patch(monkeypatch, judged)
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p2")
+    assert rep.dimensions is None
+    assert rep.overall_band is None
+    assert rep.unscorable is False                     # 可评，只是不出数字
+    assert len(rep.diagnostics.rewrites) == 1
+
+
+def test_module_b_unscorable_when_dims_present_but_diagnostics_empty(monkeypatch):
+    # review W1：模型填了 dims 却给全空诊断——B 用户什么都看不到，必须标 unscorable
+    _patch(monkeypatch, _judged(_dims()))              # _diag() 六列表全空
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p3")
+    assert rep.unscorable is True
+    assert rep.dimensions is None
+
+
+def test_module_b_unscorable_when_judge_refuses(monkeypatch):
+    # 方式 B 拒评信号与 A 同语义：dimensions=None → unscorable
+    _patch(monkeypatch, _judged(None))
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p1")
+    assert rep.unscorable is True
+    assert rep.unscorable_reason == judge_run.UNSCORABLE_REASON
+
+
+def test_module_b_still_feeds_audio_clips(monkeypatch, tmp_path):
+    # 方式 B 含发音诊断：音频切片照喂（contents = prompt + 切片）
+    wav = tmp_path / "c.wav"
+    wav.write_bytes(b"RIFFxxxxWAVE")
+    fake = _patch(monkeypatch, _judged(_dims()))
+    judge_run.run_judge(
+        mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p3",
+        clips=[AudioClip(path=str(wav), duration_s=1.0, file_uri=None)],
+    )
+    assert len(fake.models.last["contents"]) == 2
+
+
+def test_module_b_scorable_when_diagnostics_present_despite_missing_dims(monkeypatch):
+    # 鲁棒性：模型漏填 dims（prompt 误读 / 高负载降级）但诊断层有货——B 的可评性
+    # 不绑 dims，诊断层非空即可评，不得误标 unscorable
+    judged = _judged(None)
+    judged.diagnostics.top_priorities = [
+        TopPriority(title="t", severity="high", explanation="e", examples=["x"], quick_fix="q")
+    ]
+    _patch(monkeypatch, judged)
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode="module_p2")
+    assert rep.unscorable is False
+    assert rep.dimensions is None and rep.overall_band is None
+    assert len(rep.diagnostics.top_priorities) == 1

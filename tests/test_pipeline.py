@@ -7,7 +7,7 @@ transcribe / run_judge / upload_clip 被 mock（零网络、不下载 whisper �
 
 import pytest
 
-from app import crud, db, pipeline
+from app import crud, db, pipeline, scenario_cases
 from app.config import settings
 from app.models import Transcript, Word, transcript_from_json
 from app.report import (
@@ -166,6 +166,19 @@ def test_pipeline_passes_session_fields_and_clips_to_judge(tmp_db, monkeypatch):
     assert clips[0].file_uri == "files/abc"
     assert clips[0].duration_s == DURATION
     assert captured["recordings"] == 1
+    assert captured["case_prompt"] is None       # 非情景会话无 case 侧重段
+
+
+@pytest.mark.parametrize("case", ["ordering", "meeting"])
+def test_scenario_pipeline_injects_case_judge_focus(tmp_db, monkeypatch, case):
+    # 情景 finalize 从注册表查 case 侧重段传给 judge（P5：case prompt 注入）
+    _seed_session("scenario", scenario_case=case)
+    captured = _patch_stages(monkeypatch, _scenario_report())
+
+    _ingest_and_finalize()
+
+    assert captured["scenario_case"] == case
+    assert captured["case_prompt"] == scenario_cases.CASES[case].judge_focus
 
 
 def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):

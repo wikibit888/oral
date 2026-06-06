@@ -28,13 +28,15 @@ from app.live.client import connect_live
 from app.live.director import EXAMINER_SYSTEM_INSTRUCTION, IeltsDirector
 from app.live.tee import UserAudioTee
 from app.pipeline import finalize_session
+from app.scenario_cases import CASES as SCENARIO_CASES
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live"])
 
 VALID_TURN_MODES = {"ptt", "natural"}
-VALID_SCENARIO_CASES = {"ordering", "meeting"}
+# case 白名单由注册表推导：加 case 只改 scenario_cases.py（SCENARIO.md §2）
+VALID_SCENARIO_CASES = frozenset(SCENARIO_CASES)
 
 # fire-and-forget 的后台任务（finalize / 孤儿清理）持强引用：事件循环只持
 # 弱引用，不留住会被 GC 中途掐掉（Python 文档明示的 create_task 陷阱）。
@@ -87,8 +89,14 @@ async def live_ws(websocket: WebSocket) -> None:
     tee: UserAudioTee | None = None
     director: IeltsDirector | None = None
     ended = False
-    # 方式 A：中立考官 persona + 导演状态机（cue card 随机抽自题库 p2）
-    system_instruction = EXAMINER_SYSTEM_INSTRUCTION if sub_mode == "exam" else None
+    # 方式 A：中立考官 persona + 导演状态机（cue card 随机抽自题库 p2）；
+    # 情景：按 case 注入角色 persona（_parse_params 已保证 case 在注册表内）
+    if sub_mode == "exam":
+        system_instruction = EXAMINER_SYSTEM_INSTRUCTION
+    elif mode == "scenario":
+        system_instruction = SCENARIO_CASES[scenario_case].persona
+    else:
+        system_instruction = None
     try:
         async with connect_live(turn_mode, system_instruction) as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的

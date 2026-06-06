@@ -1,4 +1,4 @@
-"""方式 B 会话化接口（SCHEMA §6.2）：开始练习 → 逐题上传 → Get Review → Give Up。
+"""方式 B 会话化接口 + Library 列表（SCHEMA §6.2）。
 
 POST /sessions                    建会话（仅方式 B：mode=ielts + sub_mode=module_pX；
                                   方式 A / 情景对话走 /ws/live 自建）
@@ -6,6 +6,7 @@ POST /sessions/{id}/recordings    逐题上传 WAV → 202，后台增量 ingest
 POST /sessions/{id}/review        Get Review：等在途 ingest 排干 → 一次 judge；
                                   立即置 processing，前端跳 /report/{id} 轮询
 DELETE /sessions/{id}             Give Up：物理删除会话行（CASCADE）+ 音频文件，不留痕
+GET /sessions                     Library 历史会话列表（倒序，含摘要分 + seed 标注）
 
 取代旧一次性 POST /recordings。状态机：recording → processing → completed | failed。
 """
@@ -48,6 +49,21 @@ class SessionCreated(BaseModel):
     session_id: str
 
 
+class SessionSummary(BaseModel):
+    """Library 列表行（SCHEMA §6.2）：会话元数据 + 报告摘要分（未出报告为 null）。"""
+
+    id: str
+    mode: str
+    sub_mode: str | None
+    scenario_case: str | None
+    started_at: str
+    duration_s: float | None
+    status: str
+    overall_band: float | None
+    wpm: float | None
+    is_seed: bool
+
+
 @router.post("/sessions", response_model=SessionCreated, status_code=201)
 async def create_session(body: CreateSessionRequest) -> SessionCreated:
     if body.mode != "ielts":
@@ -70,6 +86,12 @@ async def create_session(body: CreateSessionRequest) -> SessionCreated:
         status="recording",
     )
     return SessionCreated(session_id=session_id)
+
+
+@router.get("/sessions", response_model=list[SessionSummary])
+async def list_sessions() -> list[SessionSummary]:
+    """Library 历史会话列表（倒序）。失败 / 进行中的会话如实列出，前端按 status 展示。"""
+    return [SessionSummary(**dict(row)) for row in crud.list_sessions()]
 
 
 @router.post("/sessions/{session_id}/recordings", status_code=202)

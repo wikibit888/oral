@@ -41,6 +41,38 @@ def get_session(session_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def list_sessions() -> list[sqlite3.Row]:
+    """Library 列表（SCHEMA §6.2）：全部会话倒序，LEFT JOIN 带出摘要分。
+
+    不过滤状态——失败 / 进行中的会话也如实列出（overall_band/wpm 为 NULL），
+    由前端按 status 决定展示。started_at 同毫秒时按 id 兜底，保证顺序确定。
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT s.id, s.mode, s.sub_mode, s.scenario_case, s.started_at, "
+            "       s.duration_s, s.status, s.is_seed, r.overall_band, r.wpm "
+            "FROM sessions s LEFT JOIN reports r ON r.session_id = s.id "
+            "ORDER BY s.started_at DESC, s.id DESC"
+        ).fetchall()
+
+
+def list_completed_reports() -> list[sqlite3.Row]:
+    """进步曲线数据源（SCHEMA §6.4）：completed 会话的报告行 + 会话元数据，时间升序。
+
+    series 的过滤（仅方式 A 进 band 轨迹 / wpm 为 NULL 不进流利度趋势）归 API 层；
+    本层只搬数据。
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT s.started_at, s.mode, s.sub_mode, "
+            "       r.overall_band, r.fc_band, r.lr_band, r.gra_band, r.pron_band, "
+            "       r.wpm, r.silence_ratio, r.filler_pm, r.error_rate "
+            "FROM reports r JOIN sessions s ON s.id = r.session_id "
+            "WHERE s.status = 'completed' "
+            "ORDER BY s.started_at ASC, s.id ASC",
+        ).fetchall()
+
+
 def add_session_duration(session_id: str, delta_s: float) -> None:
     """累加会话时长（方式 B 逐题上传时同步累计，Library 展示 / review 判据用）。"""
     with get_connection() as conn:

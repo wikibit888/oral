@@ -5,9 +5,11 @@ ingest / finalize 被 mock（真实现要跑 whisper/judge）；DB / 音频用�
 """
 
 import io
+import json
 import time
 import wave
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,7 @@ from fastapi.testclient import TestClient
 from app import crud
 from app.api import sessions as sessions_module
 from app.config import settings
+from app.db import get_connection
 from app.main import app
 
 
@@ -218,6 +221,89 @@ def test_give_up_deletes_row_and_audio(client, calls):
 
 def test_give_up_unknown_session_404(client, calls):
     assert client.delete("/sessions/nope").status_code == 404
+
+
+# ---------- GET /sessions（Library 列表）----------
+
+
+def test_list_sessions_empty(client):
+    r = client.get("/sessions")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_list_sessions_desc_order_with_summary(client):
+    older = _create(client, sub_mode="module_p1")
+    newer = _create(client, sub_mode="module_p2")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE sessions SET started_at = '2026-06-01T10:00:00.000Z' WHERE id = ?",
+            (older,),
+        )
+        conn.execute(
+            "UPDATE sessions SET started_at = '2026-06-05T10:00:00.000Z', "
+            "status = 'completed' WHERE id = ?",
+            (newer,),
+        )
+    # newer 已出报告：列表行带摘要分；older 无报告：summary 字段为 null
+    crud.create_report(
+        session_id=newer, mode="ielts",
+        overall_band=None, fc_band=None, lr_band=None, gra_band=None,
+        pron_band=None, wpm=102.5, silence_ratio=0.3, filler_pm=5.0,
+        ttr=0.5, error_rate=2.0, report_json=json.dumps({}),
+    )
+
+    rows = client.get("/sessions").json()
+    assert [r["id"] for r in rows] == [newer, older]   # started_at 倒序
+    assert rows[0] == {
+        "id": newer,
+        "mode": "ielts",
+        "sub_mode": "module_p2",
+        "scenario_case": None,
+        "started_at": "2026-06-05T10:00:00.000Z",
+        "duration_s": None,
+        "status": "completed",
+        "overall_band": None,
+        "wpm": 102.5,
+        "is_seed": False,
+    }
+    assert rows[1]["status"] == "recording"
+    assert rows[1]["overall_band"] is None and rows[1]["wpm"] is None
+
+
+def test_list_sessions_marks_seed(client):
+    crud.create_session(
+        session_id=uuid4().hex, mode="ielts", sub_mode="exam",
+        scenario_case=None, audio_path=None, duration_s=120.0,
+        status="completed", is_seed=True,
+    )
+    rows = client.get("/sessions").json()
+    assert rows[0]["is_seed"] is True
+
+
+def test_list_sessions_includes_live_path_modes(client):
+    """Live 路径（/ws/live 自建，不走 POST /sessions）的方式 A / 情景会话也如实列出。"""
+    exam = crud.create_session(
+        session_id=uuid4().hex, mode="ielts", sub_mode="exam",
+        scenario_case=None, audio_path=None, duration_s=300.0, status="completed",
+    )
+    crud.create_report(
+        session_id=exam, mode="ielts",
+        overall_band=7.0, fc_band=7.0, lr_band=6.5, gra_band=7.0,
+        pron_band=7.0, wpm=120.0, silence_ratio=0.2, filler_pm=3.0,
+        ttr=0.6, error_rate=1.0, report_json=json.dumps({}),
+    )
+    crud.create_session(
+        session_id=uuid4().hex, mode="scenario", sub_mode=None,
+        scenario_case="ordering", audio_path=None, duration_s=None, status="live",
+    )
+
+    rows = {r["id"]: r for r in client.get("/sessions").json()}
+    assert rows[exam]["overall_band"] == 7.0 and rows[exam]["sub_mode"] == "exam"
+    scenario_rows = [r for r in rows.values() if r["mode"] == "scenario"]
+    assert scenario_rows[0]["scenario_case"] == "ordering"
+    assert scenario_rows[0]["overall_band"] is None and scenario_rows[0]["wpm"] is None
+    assert scenario_rows[0]["status"] == "live"
 
 
 # ---------- 旧端点已移除 ----------

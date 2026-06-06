@@ -53,6 +53,7 @@ class FakeLiveSession:
 
     永久挂起模拟真 Live 长连接（迭代器轮间续接由 bridge 的 while True 处理），
     桥的收束依赖上行端（end_session / 断开）触发取消。
+    sent 记录全部上行（音频 Blob / ActivityStart / ActivityEnd，按发送顺序）。
     """
 
     def __init__(self, responses):
@@ -60,8 +61,12 @@ class FakeLiveSession:
         self._responses = responses
         self._first = True
 
-    async def send_realtime_input(self, *, audio):
-        self.sent.append(audio)
+    async def send_realtime_input(self, *, audio=None, activity_start=None, activity_end=None):
+        self.sent.append(audio if audio is not None else (activity_start or activity_end))
+
+    @property
+    def sent_audio(self) -> list:
+        return [s for s in self.sent if hasattr(s, "data")]
 
     def receive(self):
         async def gen():
@@ -95,7 +100,8 @@ def no_finalize(monkeypatch):
 
 def _patch_session(monkeypatch, session) -> None:
     @asynccontextmanager
-    async def fake_connect():
+    async def fake_connect(turn_mode="natural"):
+        session.turn_mode = turn_mode  # 记录穿透到连接层的轮次模式
         yield session
 
     monkeypatch.setattr("app.api.live_ws.connect_live", fake_connect)
@@ -303,6 +309,115 @@ def test_same_response_audio_and_transcript(client, monkeypatch):
         ws.send_text(json.dumps({"type": "end_session"}))
 
 
+# ---------- PTT 轮次语义 ----------
+
+
+def test_ptt_activity_signals(client, monkeypatch):
+    # 按下说话首帧前自动补 activity_start；松开发 turn_end → activity_end；
+    # 再按下开新一轮再补 start（内建 VAD 已关，这对信号就是轮次边界）
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+        ws.receive_json()                  # session_started
+        ws.send_bytes(b"\x01\x02")         # 第一轮首帧
+        ws.send_bytes(b"\x03\x04")         # 同轮第二帧：不重复补 start
+        ws.send_text(json.dumps({"type": "turn_end"}))
+        ws.send_bytes(b"\x05\x06")         # 第二轮按下
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert session.turn_mode == "ptt"      # turn 模式穿透到 Live 连接层
+    kinds = [type(s).__name__ for s in session.sent]
+    assert kinds == ["ActivityStart", "Blob", "Blob", "ActivityEnd", "ActivityStart", "Blob"]
+    assert [b.data for b in session.sent_audio] == [b"\x01\x02", b"\x03\x04", b"\x05\x06"]
+
+
+def test_natural_no_activity_signals_turn_end_ignored(client, monkeypatch):
+    # natural：VAD 自动断轮，不发 activity 信号；turn_end 记日志忽略、不断流
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        ws.receive_json()
+        ws.send_bytes(b"\x01")
+        ws.send_text(json.dumps({"type": "turn_end"}))
+        ws.send_bytes(b"\x02")
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert session.turn_mode == "natural"
+    assert [type(s).__name__ for s in session.sent] == ["Blob", "Blob"]
+
+
+def test_ptt_turn_end_before_any_audio_ignored(client, monkeypatch):
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+        ws.receive_json()
+        ws.send_text(json.dumps({"type": "turn_end"}))   # 还没按下：activity 未开
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert session.sent == []              # 不发无配对的 activity_end
+
+
+# ---------- 延迟徽章 latency_ms ----------
+
+
+def test_latency_ms_emitted_once_on_examiner_first_frame(client, monkeypatch):
+    # natural：用户非静音帧采停说点 → 考官首帧后发 latency_ms（一轮一次）
+    loud = b"\x00\x08" * 1600     # 0.1s，采样值 2048 > 静音阈值
+    session = TriggeredFakeLiveSession(
+        responses=[_audio_resp(b"\x0a"), _audio_resp(b"\x0b")],
+        trigger_bytes=len(loud),
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        ws.receive_json()                      # session_started
+        ws.send_bytes(loud)
+        assert ws.receive_bytes() == b"\x0a"   # 考官首帧
+        ev = ws.receive_json()
+        assert ev["type"] == "latency_ms"
+        assert isinstance(ev["value"], int) and ev["value"] >= 0
+        assert ws.receive_bytes() == b"\x0b"   # 第二帧后没有再发（中间无 text 帧）
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+
+def test_latency_ms_ptt_after_turn_end(client, monkeypatch):
+    # ptt：静音帧也可（不看幅值），turn_end 才是停说时刻
+    quiet = b"\x01" * 16000
+    session = TriggeredFakeLiveSession(
+        responses=[_audio_resp(b"\x0a")],
+        trigger_on_activity_end=True,
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+        ws.receive_json()
+        ws.send_bytes(quiet)
+        ws.send_text(json.dumps({"type": "turn_end"}))
+        assert ws.receive_bytes() == b"\x0a"
+        ev = ws.receive_json()
+        assert ev["type"] == "latency_ms" and ev["value"] >= 0
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+
+@pytest.mark.parametrize("turn", ["natural", "ptt"])
+def test_no_latency_ms_when_user_never_spoke(client, monkeypatch, turn):
+    # 考官先开口（雅思开场）：无停说点，不发 latency_ms——两种轮次模式同语义
+    session = FakeLiveSession(
+        responses=[_audio_resp(b"\x0a"), _transcript_resp(examiner="Hello!")]
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect(f"/ws/live?mode=ielts_a&turn={turn}") as ws:
+        ws.receive_json()
+        assert ws.receive_bytes() == b"\x0a"
+        ev = ws.receive_json()                 # 下一条 text 直接是转写，无 latency_ms
+        assert ev["type"] == "transcript_delta"
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+
 # ---------- 收束 → 课后 finalize ----------
 
 
@@ -327,20 +442,27 @@ def test_end_session_triggers_finalize(client, monkeypatch):
 
 
 class TriggeredFakeLiveSession(FakeLiveSession):
-    """收满 trigger_bytes 上行字节才放下行 canned responses——
-    保证「用户帧先到、考官才开口」的时序确定，消除两泵竞态。"""
+    """收满 trigger_bytes 上行音频字节（或 PTT 的 activity_end）才放下行
+    canned responses——保证「用户先说、考官才开口」的时序确定，消除两泵竞态。"""
 
-    def __init__(self, responses, trigger_bytes):
+    def __init__(self, responses, trigger_bytes=0, trigger_on_activity_end=False):
         super().__init__(responses)
         self._trigger_bytes = trigger_bytes
+        self._trigger_on_activity_end = trigger_on_activity_end
         self._got = 0
         self._event = asyncio.Event()
 
-    async def send_realtime_input(self, *, audio):
-        self.sent.append(audio)
-        self._got += len(audio.data)
-        if self._got >= self._trigger_bytes:
-            self._event.set()
+    async def send_realtime_input(self, *, audio=None, activity_start=None, activity_end=None):
+        await super().send_realtime_input(
+            audio=audio, activity_start=activity_start, activity_end=activity_end
+        )
+        if self._trigger_on_activity_end:
+            if activity_end is not None:
+                self._event.set()
+        elif audio is not None:
+            self._got += len(audio.data)
+            if self._got >= self._trigger_bytes:
+                self._event.set()
 
     def receive(self):
         async def gen():

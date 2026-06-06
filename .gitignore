@@ -37,6 +37,7 @@ Thumbs.db
 
 # vibe coding
 docs/
+handoff/
 
 # SQLite 本地 demo 数据库
 *.db
@@ -46,3 +47,4 @@ docs/
 
 # 上传的录音 / 切片（运行时生成）
 data/audio/
+.gstack/

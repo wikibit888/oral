@@ -1,82 +1,87 @@
 # TODO / 进度跟踪
 
-> 跨会话的唯一进度真相源。**开工先读本文件**对齐进度，**收工更新**勾选已完成项、记一行进度日志。状态：`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成。
-> 阶段与时长参考 `docs/PRD.md` §10「24 小时施工计划」。
-> **前端分轨**：前端各项（P0 React 骨架、P3 前端浮层、P4 录音页/选择页、P5 case 选择页、P6 报告页/曲线）的**实现**由用户在 `TODO.frontend.md` 单独跟踪；本文件侧对前端项做**功能验证 + code review**，两者通过后方可勾选。前后端契约见 `docs/FRONTEND_HANDOFF.md`。
+> 跨会话的唯一进度真相源。**开工先读本文件**对齐进度，**收工更新**勾选已完成项、记一行进度日志。状态：`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成；行尾 `done` = 旧版任务已完成。
+> 阶段与时长参考 `docs/PRD.md` §5「交付计划与降级」；接口与数据模型 `docs/SCHEMA.md` §5–§7；前端设计 `docs/FRONTEND.md`；模式细节 `docs/IELTS.md` / `docs/SCENARIO.md`。
+> **前端分轨**：前端各项的**实现**由用户在 `TODO.frontend.md` 单独跟踪；本文件侧对前端项做**功能验证**，两者通过后方可勾选。联调契约见 `docs/FRONTEND_HANDOFF.md`。
 
-## 里程碑关卡
-
-- [x] **第 8h 关卡**：产出完整报告 JSON —— 雅思方式 B + 情景对话已端到端可用、不依赖 Live。（后端引擎已通；前端录音页 P4 待做）
-- [ ] **第 13h 关卡**：实时对话能说能听能转写，否则方式 A 降级 turn-based。（后端命门已真冒烟验证：经 /ws/live 代理能说/能听/能转写；待前端接入联调确认后勾选）
 
 ## 阶段任务
 
 ### P0 骨架（~1.5h）
-- [x] 仓库初始化 / uv + pyproject / .env.example
-- [x] Gemini Live "hello" 单次语音往返（`gemini_live.py`）
-- [x] FastAPI 后端骨架
-- [ ] React 前端骨架（实现归用户 / `TODO.frontend.md`；此处勾选 = 功能验证 + code review 通过）——2026-06-06 验证：**功能验证 PASS / code review NEEDS-FIX**（C1 recorder 泄漏在 F0 范围），findings 见 `docs/FRONTEND_REVIEW.md`，前端修复后复验勾选
-- [x] SQLite 初始化 + 表结构（sessions / turns / reports）
+- [x] 仓库初始化 / uv + pyproject / .env.example done
+- [x] Gemini Live "hello" 单次语音往返（`gemini_live.py`） done
+- [x] FastAPI 后端骨架 done
+- [x] SQLite 初始化 + 表结构（sessions / turns / reports） done
+- [x] React 前端骨架（实现归 `TODO.frontend.md`；此处勾选 = 功能验证 + code review 通过）——2026-06-06 验证：功能 PASS；review findings（🔴C1 recorder 泄漏 / 🔴C2 toFixed null / 🟡W1 AbortController / 🟡W4 mode 串 pin / 🟡W5 detail [object Object] / 🟡W6 48k 主路径测试）已全部修复，复审 **PASS**（vitest 42 绿 + build + lint 过）
 
-### P1 录音—评流水线 ★（~6h，护城河）
-- [x] 录音上传入口（`POST /recordings`，multipart WAV + {mode, sub_mode, scenario_case}）
-- [x] faster-whisper 切片转写（词级时间戳）
-- [x] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，**可单测、确定性**）
-- [x] 结构化 judge（注入 descriptor / case prompt，temperature=0）
-- [x] 诊断层 + 雅思四维聚合 → 完整报告 JSON
-- [x] `band_descriptors.md`（官方 descriptor，运行时注入）
+### P1 评测流水线 ★（~6h，护城河）
+- [ ] faster-whisper 切片转写（词级时间戳） done
+- [ ] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，可单测、确定性） done
+- [ ] 结构化 judge（注入 descriptor / case prompt，temperature=0） done
+- [ ] 诊断层 + 雅思四维聚合 → 完整报告 JSON done
+- [ ] `band_descriptors.md`（官方 descriptor，运行时注入） done
+- [ ] **增量流水线改造**：逐回合 / 逐题后台转写 + 信号（会话内执行），课后只剩一次 judge 调用 → 报告 ≤5s（SCHEMA §3）
+- [ ] 切片预上传 Files API；judge 只喂 2–3 段最长用户切片判发音
+- [ ] 后端回填字段收口：`vocabulary_diversity_pct`（TTR）由后端计算填入，judge schema 移除（practice_summary 已回填）
+- [ ] `error_rate` 计算落库（judge frequent_errors 总次数 / 转写百词；当前留 NULL）
 
 ### P2 实时对话 ★（~5h）
-- [~] WS 代理 Live（代码完成 + review PASS + 真冒烟通过；**未提交**，在 `feature/live-ws-proxy` 分支工作区；PR 挂起等联调重点 case 测完——用户决定）
-- [ ] AudioWorklet → 16k 上传 → Live → 24k 播放
+- [ ] WS 代理 Live（代码完成 + review PASS + 真冒烟通过；在 `feature/live-ws-proxy` 分支未提交，PR 挂起等联调重点 case 测完）
+- [ ] 事件转发补全：`interrupted` / `turn_complete`（barge-in 前端清播放队列）+ 建链 `session_started {session_id}`（契约 FRONTEND §5）
+- [ ] /ws/live 连接参数：`mode=ielts_a|scenario & case & turn=ptt|natural`；`end_session` 自动触发 judge
+- [ ] AudioWorklet → 16k 上传 → Live → 24k 播放（前端 F6 + 联调）
 - [ ] PTT + 轮次结束
-- [ ] 用户音频 tee + 帧时间戳（供课后切片）
-- [ ] 延迟徽章（用户说完 → 首个回包音频字节）
+- [ ] 用户音频 tee + 帧时间戳（供回合切片，喂增量流水线）
+- [ ] 延迟徽章（PTT 以 turn_end 为准；自然模式最后非静音帧近似）
 
 ### P3 雅思方式 A（~3h）
-- [ ] 后端状态机 + 导演方括号提示
-- [ ] P2 子状态（准备 60s / 长谈 / 追问）
-- [ ] cue card 静态库（8–10 张 JSON）
+- [ ] 后端状态机 + 导演方括号提示（`app/live/director.py`）
+- [ ] P2 子状态（准备 60s 输入暂停 / 长谈 / 追问）
+- [ ] cue card 静态库（8–10 张，并入 `data/questions.json` p2）
 - [ ] 前端浮层：cue card + 倒计时 + 笔记 + "我准备好了"
 
 ### P4 方式 B + 模式选择（~1.5h）
-- [ ] 三 Part 录音模块（复用状态机单段逻辑）
-- [ ] 录音页（题目 + 录音按钮 + 波形 + 提交）
-- [ ] 雅思 A/B 选择页
+- [ ] 数据模型升级：`settings` 表（target_band）+ `sessions.is_seed` + status 枚举（SCHEMA §5.1）
+- [ ] 会话化接口：`POST /sessions` → 逐题 `POST /sessions/{id}/recordings` → `POST /sessions/{id}/review`（Get Review 触发 judge）→ `DELETE /sessions/{id}`（Give Up 物理删除）；取代旧一次性 `POST /recordings`（SCHEMA §6.2）
+- [ ] judge 按 sub_mode 区分：方式 B 注入 descriptor 按 Part 侧重诊断（含发音），**不出数字 band**（dimensions / overall_band 置空）
+- [ ] 静态题库 `data/questions.json`（p1/p2/p3 多题）+ `GET /questions?part=`
+- [ ] Gemini TTS 预生成题库音频 + `/static/tts` 挂载
+- [ ] 三 Part 录音模块：多题流程（TTS 读题 → 录音 → Next 逐题；按钮 Pause/Resume、Next、Get Review、Give Up）
+- [ ] 雅思 A/B 选择页（验证 + review）
 
 ### P5 情景对话 case（~1.5h）
-- [ ] 点餐 judge prompt + persona
-- [ ] 会议 judge prompt + persona
-- [ ] case 选择页
+- [ ] 接入 Live 会话页（复用 P2 代理；无状态机；手动 End + persona 自然收尾；Live 挂直接报错）
+- [ ] 点餐 persona prompt + judge prompt
+- [ ] 会议 persona prompt + judge prompt
+- [ ] ask_help 破壁：控制事件 → 导演提示注入，persona 临时破壁后回角色（方式 A 隐藏按钮）
+- [ ] case 选择页（验证 + review）
 
 ### P6 报告 + 进步 UI（~4h）
-- [ ] 诊断式报告页
-- [ ] 流利度折线 + 雷达 + 目标差距（recharts）
-- [ ] seed 脚本（6–8 条历史会话，标注为演示数据）
+- [ ] 顶部导航 TopNav：Practice（hover 下拉 IELTS/Scenario）/ Library / Review；会话 / 录音中隐藏
+- [ ] 首页两块改造（块1 产品介绍 + 块2 ModeSelect）+ `/practice` 页（复用 ModeSelect）
+- [ ] 报告页合并：处理态（流水线进度 + 骨架）+ 报告态（流式填充）同一路由 `/report/{id}`；删除独立 Processing 页
+- [ ] Library 页 + `GET /sessions` 列表接口（seed 标注"演示数据"）
+- [ ] Review 进步面板（原 Progress 改名）：band 轨迹（仅雅思 A）+ 雷达 + 流利度趋势 + 目标差距；`GET /progress` + `GET/PUT /settings`
+- [ ] seed 脚本（6–8 条历史会话，`is_seed` 标注；流利度爬升 + 雅思 A band 5.5→6.5）
 
 ### P7 eval + 收尾（~2h）
-- [ ] eval harness 跑方差（每维 band std ≤ 0.5）
+- [ ] eval harness 跑方差（同输入 judge 5 次，四维 band 方差 ≤ 0.5）
 - [ ] golden 录音校方向
+- [ ] 缺口③：ASR 规范化致 evidence 非 transcript 逐字子串（报告 UI 高亮 / 引证校验）
 - [ ] dev-only「跳到下一 Part」
 - [ ] README
 
 ### P8 缓冲（~1.5h）
 - [ ] 端到端联调 / 修复 / 备演示路径
 
+### 拓展（最后优化，不在 24h 主线）
+- [ ] 雅思原题库：`ielts_questions` 表 + 录入/查询/删除接口；`GET /questions` 优先原题库、回退静态库（SCHEMA §7）
+- [ ] SSE 流式报告 `GET /reports/{id}/stream`（报告态逐段填充；未实现前轮询兜底）
+
 ## 进度日志
 
 > 每次收工追加一行：`YYYY-MM-DD — 做了什么 / 卡在哪 / 下次从哪开始`。
 
-- 2026-06-06 — 建立 CLAUDE.md 与本 TODO；P0 仅有 Live hello demo，FastAPI/React/SQLite 待起。下次从 P0 后端骨架开始。
-- 2026-06-06 — P0 FastAPI 后端骨架完成（`feature/fastapi-skeleton`）：app 工厂 + pydantic-settings 配置 + CORS + `GET /health`、`GET /`；`uv run python main.py` 起服务，自测 /health、/、/docs 均 200。下次做 SQLite 初始化 + 表结构。
-- 2026-06-06 — P0 SQLite 初始化 + 表结构完成：`app/schema.sql`（sessions/turns/reports，对齐 PRD §8.1）+ `app/db.py`（get_connection 开外键 / init_db 幂等建表）+ FastAPI lifespan 启动自动建表；`oral.db` 已 gitignore。自测：建表、列名、外键级联删除、CHECK(mode)、report_json 存取全通过。P0 后端就绪，仅剩「React 前端骨架」未做（按 PRD §10 排序，P1 不依赖前端，可先行）。下次按选择：React 骨架，或直接进 P1 录音—评流水线（先做 `POST /recordings` 上传入口）。
-- 2026-06-06 — P1 录音上传入口完成：`POST /recordings`（multipart WAV + {mode,sub_mode,scenario_case}）→ 校验（mode/子类一致性 + WAV 头）→ 落盘 `data/audio/{id}.wav` → 建 sessions 行（status=uploaded，duration 由 WAV 头算）。新增 `app/api/recordings.py`、`app/storage.py`、`app/crud.py`，加依赖 python-multipart。自测 6 用例（2 正常 + 4 校验错误）+ 落库/落盘全通过。下次做 P1 第 2 步：faster-whisper 切片转写（词级时间戳）。
-- 2026-06-06 — P1 faster-whisper 转写完成（**PR 模式**，分支 `feature/whisper-transcription`）：`app/transcribe.py` 提供 `transcribe(path)→Transcript`（词级时间戳 + 概率 + 语言 + 时长），VAD 关闭以保停顿信号，模型懒加载单例、config 可配（默认 small/cpu/int8/en）。加依赖 faster-whisper。自测：用 macOS say 生成语音转 16k/mono WAV，转写「I think science is mostly about curiosity.」7 词时间戳正确。下次做 P1 第 3 步：客观信号计算（语速/停顿/填充词/自我更正/词汇，可单测、确定性）。
-- 2026-06-06 — P1 客观信号计算完成（PR 模式，stacked 分支 `feature/objective-signals`，base=whisper 分支）：抽 `app/models.py`（Word/Transcript）让信号不依赖 ASR；`app/signals.py` 的 `compute_signals(words,duration)` 算语速(gross/articulation)、停顿(0.3s静默/1.0s犹豫/silence_ratio)、填充词密度、自我更正(启发式)、词汇(TTR/低频词(wordfreq)/重复度)，阈值命名常量。`tests/test_signals.py` 3 用例全过（含「同输入两次同输出」确定性断言）。加依赖 wordfreq + dev pytest，pyproject 配 pytest。待 PR #1 合并后本 PR base 自动转 main。下次做 P1 第 4 步：结构化 judge（注入 descriptor/case prompt，temperature=0）。
-- 2026-06-06 — P1 judge 第 1 部分完成（PR 模式，分支 `feature/judge-foundation`，base=main）：`app/report.py`（报告 pydantic schema，对齐 PRD §6.2，band 0–9 校验、情景 dimensions/overall 为 None）+ `app/judge/band_descriptors.md`（官方四维 descriptor，运行时注入）+ `app/judge/prompt.py` 的 `build_judge_prompt`（IELTS 注入 descriptor+四维、情景禁 band+case 接入点、grounding 规则=evidence 逐字/防幻觉/信号非成绩）。`tests/test_judge_prompt.py` 8 用例全过（连同信号共 11 个）。不含 LLM 调用、纯单测。下次做 P1 judge 第 2 部分（4b）：Gemini 结构化调用（temperature=0，喂 signals+transcript+音频）+ overall_band 聚合。
-- 2026-06-06 — **前端 P0/F0–F4 验证（新职责首跑：功能验证 + code review）**：功能验证 PASS——vitest 26/26、eslint 0 错、build 过、9 路由 headless 目检 console 0 错、Vite `/api` 代理真连后端（health OK + `/processing/bad-id` 真 404 detail 直出）；曾见 502 console 错误查实为旧 browse 会话残留，非真问题。code-reviewer NEEDS-FIX：🔴C1 recorder.js `start()` 半途失败泄漏 mic/AudioContext（F0 范围）、🔴C2 ReportView `overall_band.toFixed` 无 null 防御；🟡W1 轮询缺 AbortController / W4 mode 串未 pin / W5 detail 可显 [object Object] / W6 wavEncoder 缺 48k→16k 主路径测试 等。findings 全文 `docs/FRONTEND_REVIEW.md` 交前端会话修复；修复后后端复验（test/lint/build + recorder 失败路径目检）→ 通过才勾 P0。下次：等前端修复复验，或继续等联调结果走 live PR。
-- 2026-06-06 — **P2 WS 代理 Live 构建完成（未提交、PR 挂起等联调）**：`app/live/{client,bridge}.py` + `/ws/live` 端点 + config.live_model；契约=binary 16k PCM 上行 / 24k PCM + transcript_delta/error 事件下行 / end_session 控制。7 个 WS 单测（全套 61 过）；过 code-reviewer（PASS，修外部取消任务泄漏 Warning）；**真冒烟通过 = 13h 命门后端已验证**（上行被转写、下行 25KB 24k 音频、考官转写、end_session 干净收束）。已知缺口：interrupted/turn_complete 事件未转发（barge-in 听感断链，SDK 字段已验证存在）——用户决定联调实测后定方案。联调契约 + 全量边际 case 清单（A1–G6 带优先级）存 `docs/FRONTEND_HANDOFF.md`；**联调后端须在 `feature/live-ws-proxy` 分支起服务**（代码在该分支工作区、未提交）。下次：等用户联调结果（重点带回 A1 音频残留时长 / B2 长独白断轮 / C4 重连体验）→ 测完走 /pr → 再做 tee+帧时间戳、PTT/事件转发 PR。
-- 2026-06-06 — **缺口②修复：不可评输入落 unscorable 报告**（PR #8 已合并 main，分支 `feature/unscorable-report`）：雅思 judge 拒评（dimensions=None）不再抛错置 failed，改标 `report.unscorable=true` + 统一重录提示（unscorable_reason），诊断层保留、status=done——前端按 flag 分支渲染；情景 dimensions=None 正常态不受影响；解析失败（截断/缺 diagnostics）仍走 failed（系统故障≠该重录，边界注试钉死）。过 code-reviewer（NEEDS-FIX W1/W3→修复→复审 PASS）。54 测全过 + 真冒烟（静音→done+unscorable）。测试缺口仅剩③（ASR 规范化致 evidence 非逐字子串，留 P7/报告 UI）。下次：P2 实时对话 / P5 情景 case prompt / P7 eval harness 三选一。
-- 2026-06-06 — **P1 多 agent 端到端边界测试 + 缺口①修复**（PR #7 已合并 main，分支 `feature/recordings-format-validation`）：派 3 个子 agent 测 P1（HTTP 契约/编排并发/真实音频）。结论：管道/状态机/并发/评分护城河均稳；发现 3 个质量缺口——①音频格式契约零强制（已修）、②不可评输入（静音/外语）judge 拒评但 run_judge 抛错→status=failed 哑失败、用户无报告（待定方案）、③ASR 把 First→1st 致 evidence 非 transcript 逐字子串（留 P7/报告 UI）。本 PR 修①：`POST /recordings` 强制 16k/mono/16bit（_wav_duration_seconds 多读声道/位深 + 0 帧守卫），违约 422；`tests/test_recordings.py` 7 用例。过 code-reviewer（PASS）。`uv run pytest` 49 全过。下次：定缺口②方案，或进 PRD §10 下一阶段。
-- 2026-06-06 — **P1 第 5 步完成 + 第 8h 关卡达成**（PR #6 已合并 main，分支 `feature/report-pipeline`）：`app/pipeline.py` 的 `process_session()` 把 transcribe→compute_signals→run_judge→落库串成完整流水线；`POST /recordings` 经 BackgroundTasks 后台触发，`GET /reports/{id}` 轮询契约（done 返完整报告 JSON）。`app/db.py` get_connection 改提交/回滚/关闭上下文管理器（消除轮询连接泄漏）；crud 加 get_session/update_session_status/create_report/get_report。落库铁律：情景四维列 NULL、error_rate 留 NULL（PRD §8.2）。**过 code-reviewer（NEEDS-FIX→修 C1 置 done 移出 try 防误标 failed 屏蔽报告 + W2/W3/W4/W5/S2）**。`uv run pytest` 42 全过（全 mock、临时 DB）。**真端到端冒烟通过**：雅思 P2 22.4s 出报告(overall 6.0+四维逐字 evidence)、情景点餐 24.4s 强制无 band、reports 表正规化列核对无误。下次做 P1 之外的下一阶段：按 PRD §10 可进 P4（方式 B 录音页 / 模式选择，让流水线有前端入口）或 P2 实时对话，或先补 P7 eval harness 压方差。
-- 2026-06-06 — P1 judge 第 2 部分（4b）完成（PR 模式，分支 `feature/judge-gemini-call`）：`app/judge/run.py` 的 `run_judge()`——Gemini 结构化调用 temperature=0 + response_schema=Report，雅思喂音频切片判发音、情景强制无 band，practice_summary 用事实值覆盖，overall_band 由 `app/judge/aggregate.py` 四维平均→最近 0.5（round-half-up，避银行家舍入）系统聚合（judge 不自算）。加 config.judge_model（默认 gemini-2.5-flash）。`tests/test_judge_run.py` mock 客户端（temp0/schema/聚合/音频/情景强制无 band/缺四维抛错 + 聚合舍入），全套 30 测全过。**过 code-reviewer 子 agent 审（PASS）**，按 findings 修了：W1 代理改走 http_options 不污染 env + 客户端懒加载单例、W2 parsed 兜底解析失败带上下文、W3 IELTS 无音频 warning、W4 各维 band 对齐 0.5。**真连 Gemini 冒烟通过**（gemini-2.5-flash）：IELTS 带音频返回四维(0.5 半档)+逐字 evidence、overall 由四维聚合(4.75→5.0)；情景强制 dimensions/overall=None、诊断贴合点餐语境。下次做 P1 第 5 步：诊断层+四维聚合串成完整报告流水线（upload→whisper→signals→judge→落库→GET /reports）。
+2026-06-06 — P0 全部完成并勾选：后端四项复验（pytest 61 绿 / FastAPI 冒烟 /health OK / SQLite 三表齐 / gemini_live.py 完好）；前端骨架 review findings C1/C2/W1/W4/W5/W6 修复（vitest 42 绿 + build + lint），code-reviewer 复审 PASS；统一 PR 提交 / 无阻塞 / 下次从 P1 增量流水线或 P2 事件转发补全开始
+
+

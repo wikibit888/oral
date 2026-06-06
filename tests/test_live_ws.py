@@ -275,6 +275,23 @@ def test_interrupted_and_turn_complete_forwarded(client, monkeypatch):
         ws.send_text(json.dumps({"type": "end_session"}))
 
 
+def test_end_session_backfills_wall_clock_duration(client, monkeypatch):
+    """live 会话时长（done/007 反馈①）：会话中为 NULL，end_session 单次回填墙钟时长。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        event = ws.receive_json()        # session_started
+        session_id = event["session_id"]
+        # 会话进行中尚未回填（弃局断开也不回填，duration 留 NULL 如实表示未走完）
+        assert crud.get_session(session_id)["duration_s"] is None
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    row = crud.get_session(session_id)
+    assert row["duration_s"] is not None and row["duration_s"] > 0
+    assert row["status"] == "processing"   # 时长与状态翻转同在 end_session 瞬间落库
+
+
 def test_unknown_control_does_not_kill_session(client, monkeypatch):
     session = FakeLiveSession(responses=[])
     _patch_session(monkeypatch, session)
@@ -584,6 +601,8 @@ def test_disconnect_with_clips_keeps_session_row(client, monkeypatch):
     time.sleep(0.3)                           # 给孤儿清理任务一个误删的机会窗口
     row = crud.get_session(session_id)
     assert row is not None and row["status"] == "live"
+    # 弃局不回填时长：duration 留 NULL 如实表示未走完（仅 end_session 回填墙钟）
+    assert row["duration_s"] is None
 
 
 def test_end_session_flips_status_to_processing_immediately(client, monkeypatch):

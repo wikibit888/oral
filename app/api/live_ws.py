@@ -13,6 +13,7 @@
 
 import asyncio
 import logging
+import time
 from contextlib import suppress
 from typing import Any, Coroutine
 from uuid import uuid4
@@ -114,6 +115,10 @@ async def live_ws(websocket: WebSocket) -> None:
             await websocket.send_json(
                 {"type": "session_started", "session_id": session_id}
             )
+            # 会话时长起点（单调钟，免疫系统时间跳变）：live 行建行时
+            # duration_s=NULL 且方式 B 的逐题累加链路不经过这里，无人回填
+            # 会让 Library 时长列恒 '—'（done/007 反馈①）。
+            session_start = time.monotonic()
             # tee 把上行用户音频按轮次边界切片喂增量流水线（whisper + 预上传
             # 在会话内后台跑完）。end_session → 封尾切片 + 自动触发课后 judge
             # （SCHEMA §6.1）。回调在消费到 end_session 的瞬间调度成独立 task：
@@ -124,6 +129,10 @@ async def live_ws(websocket: WebSocket) -> None:
             def _on_end_session() -> None:
                 nonlocal ended
                 ended = True
+                # 墙钟时长回填：end_session 是 live 会话唯一收束语义，bridge
+                # 消费后即 return——只触发一次，不会重复累加。弃局（断开不 End）
+                # 不回填，duration 留 NULL 如实表示未走完。
+                crud.add_session_duration(session_id, time.monotonic() - session_start)
                 # 立即翻转 processing：drain/ingest 在途窗口里前端已开始轮询，
                 # 不能让它看到契约外的过渡态卡住（联调发现①）
                 crud.update_session_status(session_id, "processing")

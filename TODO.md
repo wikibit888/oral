@@ -5,7 +5,7 @@
 
 ## 里程碑关卡
 
-- [ ] **第 8h 关卡**：产出完整报告 JSON —— 雅思方式 B + 情景对话已端到端可用、不依赖 Live。
+- [x] **第 8h 关卡**：产出完整报告 JSON —— 雅思方式 B + 情景对话已端到端可用、不依赖 Live。（后端引擎已通；前端录音页 P4 待做）
 - [ ] **第 13h 关卡**：实时对话能说能听能转写，否则方式 A 降级 turn-based。
 
 ## 阶段任务
@@ -22,7 +22,7 @@
 - [x] faster-whisper 切片转写（词级时间戳）
 - [x] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，**可单测、确定性**）
 - [x] 结构化 judge（注入 descriptor / case prompt，temperature=0）
-- [ ] 诊断层 + 雅思四维聚合 → 完整报告 JSON
+- [x] 诊断层 + 雅思四维聚合 → 完整报告 JSON
 - [x] `band_descriptors.md`（官方 descriptor，运行时注入）
 
 ### P2 实时对话 ★（~5h）
@@ -73,4 +73,5 @@
 - 2026-06-06 — P1 faster-whisper 转写完成（**PR 模式**，分支 `feature/whisper-transcription`）：`app/transcribe.py` 提供 `transcribe(path)→Transcript`（词级时间戳 + 概率 + 语言 + 时长），VAD 关闭以保停顿信号，模型懒加载单例、config 可配（默认 small/cpu/int8/en）。加依赖 faster-whisper。自测：用 macOS say 生成语音转 16k/mono WAV，转写「I think science is mostly about curiosity.」7 词时间戳正确。下次做 P1 第 3 步：客观信号计算（语速/停顿/填充词/自我更正/词汇，可单测、确定性）。
 - 2026-06-06 — P1 客观信号计算完成（PR 模式，stacked 分支 `feature/objective-signals`，base=whisper 分支）：抽 `app/models.py`（Word/Transcript）让信号不依赖 ASR；`app/signals.py` 的 `compute_signals(words,duration)` 算语速(gross/articulation)、停顿(0.3s静默/1.0s犹豫/silence_ratio)、填充词密度、自我更正(启发式)、词汇(TTR/低频词(wordfreq)/重复度)，阈值命名常量。`tests/test_signals.py` 3 用例全过（含「同输入两次同输出」确定性断言）。加依赖 wordfreq + dev pytest，pyproject 配 pytest。待 PR #1 合并后本 PR base 自动转 main。下次做 P1 第 4 步：结构化 judge（注入 descriptor/case prompt，temperature=0）。
 - 2026-06-06 — P1 judge 第 1 部分完成（PR 模式，分支 `feature/judge-foundation`，base=main）：`app/report.py`（报告 pydantic schema，对齐 PRD §6.2，band 0–9 校验、情景 dimensions/overall 为 None）+ `app/judge/band_descriptors.md`（官方四维 descriptor，运行时注入）+ `app/judge/prompt.py` 的 `build_judge_prompt`（IELTS 注入 descriptor+四维、情景禁 band+case 接入点、grounding 规则=evidence 逐字/防幻觉/信号非成绩）。`tests/test_judge_prompt.py` 8 用例全过（连同信号共 11 个）。不含 LLM 调用、纯单测。下次做 P1 judge 第 2 部分（4b）：Gemini 结构化调用（temperature=0，喂 signals+transcript+音频）+ overall_band 聚合。
+- 2026-06-06 — **P1 第 5 步完成 + 第 8h 关卡达成**（PR #6 已合并 main，分支 `feature/report-pipeline`）：`app/pipeline.py` 的 `process_session()` 把 transcribe→compute_signals→run_judge→落库串成完整流水线；`POST /recordings` 经 BackgroundTasks 后台触发，`GET /reports/{id}` 轮询契约（done 返完整报告 JSON）。`app/db.py` get_connection 改提交/回滚/关闭上下文管理器（消除轮询连接泄漏）；crud 加 get_session/update_session_status/create_report/get_report。落库铁律：情景四维列 NULL、error_rate 留 NULL（PRD §8.2）。**过 code-reviewer（NEEDS-FIX→修 C1 置 done 移出 try 防误标 failed 屏蔽报告 + W2/W3/W4/W5/S2）**。`uv run pytest` 42 全过（全 mock、临时 DB）。**真端到端冒烟通过**：雅思 P2 22.4s 出报告(overall 6.0+四维逐字 evidence)、情景点餐 24.4s 强制无 band、reports 表正规化列核对无误。下次做 P1 之外的下一阶段：按 PRD §10 可进 P4（方式 B 录音页 / 模式选择，让流水线有前端入口）或 P2 实时对话，或先补 P7 eval harness 压方差。
 - 2026-06-06 — P1 judge 第 2 部分（4b）完成（PR 模式，分支 `feature/judge-gemini-call`）：`app/judge/run.py` 的 `run_judge()`——Gemini 结构化调用 temperature=0 + response_schema=Report，雅思喂音频切片判发音、情景强制无 band，practice_summary 用事实值覆盖，overall_band 由 `app/judge/aggregate.py` 四维平均→最近 0.5（round-half-up，避银行家舍入）系统聚合（judge 不自算）。加 config.judge_model（默认 gemini-2.5-flash）。`tests/test_judge_run.py` mock 客户端（temp0/schema/聚合/音频/情景强制无 band/缺四维抛错 + 聚合舍入），全套 30 测全过。**过 code-reviewer 子 agent 审（PASS）**，按 findings 修了：W1 代理改走 http_options 不污染 env + 客户端懒加载单例、W2 parsed 兜底解析失败带上下文、W3 IELTS 无音频 warning、W4 各维 band 对齐 0.5。**真连 Gemini 冒烟通过**（gemini-2.5-flash）：IELTS 带音频返回四维(0.5 半档)+逐字 evidence、overall 由四维聚合(4.75→5.0)；情景强制 dimensions/overall=None、诊断贴合点餐语境。下次做 P1 第 5 步：诊断层+四维聚合串成完整报告流水线（upload→whisper→signals→judge→落库→GET /reports）。

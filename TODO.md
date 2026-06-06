@@ -35,8 +35,8 @@
 - [x] 延迟徽章（PTT 以 turn_end 为准；自然模式最后非静音帧近似）——2026-06-07 `LatencyMeter` 相位机 + `latency_ms {value}` 事件（考官首帧、一轮一次）；真冒烟 ptt 894ms / natural 2299ms（VAD 判停耗时，差异符合预期）
 
 ### P3 雅思方式 A（~3h）
-- [ ] 后端状态机 + 导演方括号提示（`app/live/director.py`）
-- [ ] P2 子状态（准备 60s 输入暂停 / 长谈 / 追问）
+- [x] 后端状态机 + 导演方括号提示（`app/live/director.py`）——2026-06-07 PR #20：IeltsDirector FSM（预埋式指令 + 音频门控计轮 + 计时器防自取消，5 轮真冒烟迭代实锤）；真 Live 验证至长谈邀请；已知问题：长谈中段偶发上游 1008（当晚服务不稳，记 P8 联调复查）
+- [x] P2 子状态（准备 60s 输入暂停 / 长谈 / 追问）——随 PR #20：备题 input_paused 上行丢帧 + 60s 计时器/ready 先到先得 + 追问预埋
 - [x] cue card 静态库（8–10 张，并入 `data/questions.json` p2）——2026-06-07 随 PR #15 题库落地（p2×8 张，话题+4 bullets 官方句式）
 - [ ] 前端浮层：cue card + 倒计时 + 笔记 + "我准备好了"
 
@@ -73,6 +73,7 @@
 
 ### P8 缓冲（~1.5h）
 - [ ] 端到端联调 / 修复 / 备演示路径
+- [ ] 方式 A 长谈中段偶发上游 1008 abort 复查（PR #20 已知问题；方向：client_content 与实时音频交错 / 导演提示 turn_complete=False 试探；无导演长会话此前联调正常）
 
 ### 拓展（最后优化，不在 24h 主线）
 - [ ] 雅思原题库：`ielts_questions` 表 + 录入/查询/删除接口；`GET /questions` 优先原题库、回退静态库（SCHEMA §7）
@@ -88,6 +89,7 @@
 2026-06-06 — P2 第 6 项 tee 完成并勾选：UserAudioTee 地板状态机（流位置时钟=字节推导；考官首帧封片 / turn_complete 开新片 / interrupted 2s 预缓冲回补打断起头 / finish 封口闸门防 drain 漏片）+ save_clip 裸 PCM 封 WAV + drain 排干再 finalize；pytest 101 绿 + 真冒烟（live 会话出真报告：band 6.0·planted 主谓错误捕获·turns ts/file_uri 落库·TTR 回填一致）+ review PASS（W1-W4/S1-S3 已修）；期间 judge 上游偶发 503 会直接 failed（无重试，记 P8 缓冲考虑）/ 下次从 F6 联调或 PTT + 轮次结束开始
 2026-06-07 — P2 联调修缮（前端 F6 回执 4 条 + judge 503）：end_session 瞬间置 processing（修契约外过渡态）、零切片弃局删孤儿行（StrictMode 双连接）、connect_live 建链 OSError 重试一次（真实 TLS reset 场景验证触发）、judge 上游 5xx 按 (2,5)s 退避重试、APP_RELOAD 可配（联调防热重载杀会话）、SCHEMA §6.3 status 枚举对齐现实现；pytest 110 绿 + 修缮冒烟两项 PASS + review PASS / judge 上游持续高负载时重试耗尽仍诚实 failed / 下次从 F6 功能验证 + review（勾选 P2 第 4 项）或 PTT 开始
 2026-06-07 — P2 第 4 项 F6 分轨验收完成并勾选：功能验证 PASS（vitest 73 绿 + lint + build + 前端真链路实测 + 后端两轮真冒烟）；独立 review NEEDS-FIX 四警告（W1 End 漏 flush 合批尾音→tee 截最后一段语音 / W2 Safari 采样率钳制 2 倍速 / W3 PcmPlayer 零单测 / W4 合批续推用例）已按 P0 先例在前端工作树代修，复验 PASS；交接 handoff/inbox/003 待前端 review 后随其轨道提交 / 下次从 PTT + 轮次结束开始
+2026-06-07 — **P3 后端两项完成并勾选**（PR #20）：IeltsDirector 导演状态机（p1→p2_prep→p2_talk→p2_followup→p3→done）+ 方括号导演提示 + 中立考官 persona + P2 备题子状态（60s 输入暂停/ready 提前）。三个实锤修复：音频门控计轮（空回执轮防抢跑）、计时器防自取消（CancelledError 截断指令帧致 1007/1008 的根因）、system_instruction Content 形状。pytest 175 绿 + review NEEDS-FIX(C1/W1)→修→复审 PASS；真 Live 验证至长谈邀请，长谈中段偶发 1008 记 P8 复查。前端浮层（cue card/倒计时/笔记/ready）契约见 handoff/inbox/005。下次：P5 情景 persona 或等联调
 2026-06-07 — **P4 后端五项全部完成**（PR #16/#17/#18/#19，#15 已先行）：数据模型升级（settings/is_seed/status 枚举+user_version 门控迁移）→ 会话化接口（POST /sessions 族，竞态关死/重录去重）→ judge 按 sub_mode（方式 B 无数字 band、可评性只看诊断层）→ TTS 预生成（24/24 真跑全生成）。pytest 163 绿；四轮独立 review（两轮 NEEDS-FIX 阻断项均修复后复审 PASS）；三次真冒烟（方式 B 双题 38s 报告/B 无 band 12s/TTS 回填 200）。判断记录：gemini-2.5-flash 间歇 503 风暴，B 冒烟改 JUDGE_MODEL=flash-lite 绕行验证（生产默认不动）。**BREAKING 汇总待 handoff/inbox/004**：status 枚举改名、POST /recordings→/sessions 族、B 报告无 band。下次：投递 handoff 004 → P3 导演状态机（live 巷道已清）
 2026-06-07 — P4 第 4 项题库完成并勾选（PR #15，连带勾 P3 第 3 项 cue card 库）：data/questions.json p1×8/p2×8 cue cards/p3×8 + GET /questions?part=（中文 422、id 内容 pin）+ /static/tts 挂载（tts_url 按文件存在性逐请求回填，TTS 落地免重启）；pytest 130 绿 + review NEEDS-FIX(C1 挂载缺失+W1-W5)→全修。与并行会话 PR #14 同窗零冲突（巷道隔离）。下次：P4b 数据模型升级（settings 表+is_seed+status 枚举）→ P4c 会话化接口 → P4d judge 按 sub_mode → P4e TTS 预生成；方式 B 后端齐后一次性 handoff 前端
 2026-06-07 — P2 第 5、7 项完成并勾选（**P2 全部完成**）：PTT（turn=ptt 关内建 VAD + 上行首帧 activity_start + turn_end→activity_end，natural 误发 turn_end 忽略不断流）+ 延迟徽章（LatencyMeter 相位机：ptt 以 turn_end 为停说点、natural 以最后非静音帧近似，考官首帧发 latency_ms 一轮一次）；pytest 130 绿（+16 用例，假时钟确定性）+ 真冒烟（ptt VAD 关实锤·latency 894ms / natural 2299ms）+ review PASS（warning/建议已修）/ judge 上游 503 持续未恢复（与本变更无关）/ 下次从 P3 导演状态机或 P4 方式 B 开始

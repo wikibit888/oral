@@ -2,12 +2,16 @@
 
 帧契约（FRONTEND §5 事件契约的桥接子集；建链 session_started 由入口层发）：
 - 浏览器 → 后端：binary = 16k PCM16 音频帧；text = JSON 控制消息
-  （目前支持 {"type": "end_session"}；PTT/turn_end 等后续 PR 加）。
+  {"type": "end_session"} / {"type": "turn_end"}（仅 PTT 模式有效）。
 - 后端 → 浏览器：binary = 24k PCM16 音频帧；text = JSON 事件
   transcript_delta {role: user|examiner, text} / interrupted（barge-in，
-  前端立即清空 24k 播放队列）/ turn_complete（考官回合结束）。
+  前端立即清空 24k 播放队列）/ turn_complete（考官回合结束）/
+  latency_ms {value}（考官首帧时的响应延迟，app/live/latency.py）。
 
-上行靠 Live 内建 VAD 自动断轮次（PTT 显式 turn_end 在后续 PR 叠加）。
+轮次边界按连接时确定的 turn 模式（SCHEMA §6.1）：
+- natural：Live 内建 VAD 自动断轮次；turn_end 控制记日志忽略。
+- ptt：内建 VAD 已关（client._live_config）——上行首帧自动补 activity_start，
+  turn_end 控制发 activity_end（前端按住说话、松开发 turn_end）。
 任一方向结束（客户端断开 / end_session / Live 流结束）即整体收束。
 """
 
@@ -18,13 +22,17 @@ import logging
 from google.genai import types
 
 from app.live.client import AUDIO_MIME
+from app.live.latency import LatencyMeter
 
 logger = logging.getLogger(__name__)
 
 
-async def bridge(websocket, session, *, tee=None, on_end_session=None) -> None:
+async def bridge(
+    websocket, session, *, turn_mode="natural", tee=None, on_end_session=None
+) -> None:
     """并发跑上行 / 下行两个泵，任一结束就取消另一个；泵内异常向上抛。
 
+    turn_mode：natural | ptt（连接时确定，决定上行泵的轮次信号语义）。
     tee：用户音频分叉器（app/live/tee.py，鸭子类型）。泵内在对应位置同步调
     钩子：上行帧 on_user_frame、下行音频 on_model_audio、事件 on_interrupted /
     on_turn_complete——切片的轮次边界与发给前端的事件天然同一来源。
@@ -33,8 +41,13 @@ async def bridge(websocket, session, *, tee=None, on_end_session=None) -> None:
     调用方用它收尾 tee 并调度课后 judge——前端发完 end_session 可能立即断开并
     跳报告页，本协程随时会被取消，收束后的代码不保证执行，故不能放在 bridge 之后。
     """
-    up = asyncio.create_task(_pump_upstream(websocket, session, tee, on_end_session))
-    down = asyncio.create_task(_pump_downstream(websocket, session, tee))
+    # 延迟徽章（latency_ms 事件）：两泵共享一个测量器——上行采用户停说点，
+    # 下行在考官首帧出数（FRONTEND §5）
+    meter = LatencyMeter(turn_mode)
+    up = asyncio.create_task(
+        _pump_upstream(websocket, session, turn_mode, tee, on_end_session, meter)
+    )
+    down = asyncio.create_task(_pump_downstream(websocket, session, tee, meter))
     try:
         done, _ = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
     finally:
@@ -48,11 +61,17 @@ async def bridge(websocket, session, *, tee=None, on_end_session=None) -> None:
             raise exc
 
 
-async def _pump_upstream(websocket, session, tee=None, on_end_session=None) -> None:
-    """浏览器 → Live：二进制音频帧转发（tee 同步分叉）；文本按控制消息处理。
+async def _pump_upstream(
+    websocket, session, turn_mode="natural", tee=None, on_end_session=None, meter=None
+) -> None:
+    """浏览器 → Live：二进制音频帧转发（tee / meter 同步分叉）；文本按控制消息处理。
 
+    ptt 模式：首帧音频前补 activity_start，turn_end 控制发 activity_end——
+    内建 VAD 已关，没有这对信号 Live 不会响应。
     收到 end_session 先回调 on_end_session 再返回；客户端断开直接返回。
     """
+    ptt = turn_mode == "ptt"
+    activity_open = False
     while True:
         message = await websocket.receive()
         if message["type"] == "websocket.disconnect":
@@ -60,44 +79,69 @@ async def _pump_upstream(websocket, session, tee=None, on_end_session=None) -> N
         if (data := message.get("bytes")) is not None:
             if tee is not None:
                 tee.on_user_frame(data)
+            if meter is not None:
+                meter.on_user_frame(data)   # natural：非静音帧刷新停说时刻
+            if ptt and not activity_open:
+                await session.send_realtime_input(activity_start=types.ActivityStart())
+                activity_open = True
             await session.send_realtime_input(
                 audio=types.Blob(data=data, mime_type=AUDIO_MIME)
             )
         elif (text := message.get("text")) is not None:
-            if _handle_control(text):
+            control = _parse_control(text)
+            if control == "end_session":
                 if on_end_session is not None:
                     on_end_session()
                 return
+            if control == "turn_end":
+                if ptt and activity_open:
+                    if meter is not None:
+                        meter.on_turn_end()  # ptt：松开即停说时刻
+                    await session.send_realtime_input(activity_end=types.ActivityEnd())
+                    activity_open = False
+                else:
+                    # natural 模式（VAD 自动断轮）或按下前误发：忽略。
+                    # debug 级——前端 bug 反复误发时不至于刷屏（review 建议）
+                    logger.debug(
+                        "turn_end 被忽略：turn_mode=%s activity_open=%s",
+                        turn_mode, activity_open,
+                    )
 
 
-def _handle_control(text: str) -> bool:
-    """处理控制消息；返回 True 表示会话应结束。未知/非法消息记日志忽略，不断流。"""
+def _parse_control(text: str) -> str | None:
+    """解析控制消息，返回类型字符串；未知/非法消息记日志忽略（None），不断流。"""
     try:
         control = json.loads(text)
     except ValueError:
         logger.warning("live WS 收到非 JSON 文本消息，忽略：%.100s", text)
-        return False
-    if control.get("type") == "end_session":
-        return True
+        return None
+    kind = control.get("type")
+    if kind in ("end_session", "turn_end"):
+        return kind
     logger.warning("live WS 收到未知控制消息，忽略：%.100s", text)
-    return False
+    return None
 
 
-async def _pump_downstream(websocket, session, tee=None) -> None:
+async def _pump_downstream(websocket, session, tee=None, meter=None) -> None:
     """Live → 浏览器：音频字节直发 binary；双向转写发 transcript_delta 事件。
 
     session.receive() 的迭代器在一轮结束后耗尽，外层 while True 续接下一轮
     （与 gemini_live.py demo 同模式）。
     """
-    # tee 钩子一律在 await 发送之前调：钩子只动内存、无 await 点，保证切片
-    # 边界状态先于事件落定——若放在 send 之后，send 让出控制权的窗口里上行泵
-    # 可能已处理新帧，边界就漂了。
+    # tee / meter 钩子一律在 await 发送之前调：钩子只动内存、无 await 点，保证
+    # 切片边界状态先于事件落定——若放在 send 之后，send 让出控制权的窗口里
+    # 上行泵可能已处理新帧，边界就漂了。
     while True:
         async for response in session.receive():
             if response.data:
                 if tee is not None:
                     tee.on_model_audio()    # 考官开口 = 用户切片的轮次边界
+                latency_ms = meter.on_model_audio() if meter is not None else None
                 await websocket.send_bytes(response.data)
+                if latency_ms is not None:  # 考官首帧才有值（一轮一次）
+                    await websocket.send_json(
+                        {"type": "latency_ms", "value": latency_ms}
+                    )
             sc = response.server_content
             if sc is None:
                 continue
@@ -117,9 +161,13 @@ async def _pump_downstream(websocket, session, tee=None) -> None:
             if sc.interrupted:
                 if tee is not None:
                     tee.on_interrupted()    # 地板归还用户 + 预缓冲回补打断起头
+                if meter is not None:
+                    meter.on_turn_taken_back()
                 await websocket.send_json({"type": "interrupted"})
             # 考官回合结束（VAD/turn 边界）；PTT 模式前端也靠它解锁下一次按键
             if sc.turn_complete:
                 if tee is not None:
                     tee.on_turn_complete()  # 地板归还用户，开新切片
+                if meter is not None:
+                    meter.on_turn_taken_back()
                 await websocket.send_json({"type": "turn_complete"})

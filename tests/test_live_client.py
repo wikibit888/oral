@@ -17,8 +17,8 @@ def _connect_factory(fail_times: int, exc: Exception, attempts: list):
     """返回 _connect_once 替身：前 fail_times 次 __aenter__ 抛 exc，之后成功。"""
 
     @asynccontextmanager
-    async def fake_connect_once():
-        attempts.append(1)
+    async def fake_connect_once(turn_mode="natural"):
+        attempts.append(turn_mode)
         if len(attempts) <= fail_times:
             raise exc
         yield f"session-{len(attempts)}"
@@ -34,12 +34,20 @@ def test_transient_oserror_retried_once(monkeypatch, caplog):
     )
 
     async def scenario():
-        async with connect_live() as session:
+        async with connect_live("ptt") as session:
             return session
 
     assert asyncio.run(scenario()) == "session-2"
-    assert len(attempts) == 2
+    assert attempts == ["ptt", "ptt"]      # turn 模式穿透且重试沿用
     assert "重试一次" in caplog.text
+
+
+def test_live_config_ptt_disables_vad():
+    cfg = client_module._live_config("ptt")
+    assert cfg["realtime_input_config"]["automatic_activity_detection"]["disabled"] is True
+    # natural 不带该键；模块常量不被污染（深拷贝语义）
+    assert "realtime_input_config" not in client_module._live_config("natural")
+    assert "realtime_input_config" not in client_module.LIVE_CONFIG
 
 
 def test_second_failure_raises(monkeypatch):
@@ -79,8 +87,8 @@ def test_midsession_oserror_not_retried(monkeypatch):
     attempts: list = []
 
     @asynccontextmanager
-    async def fake_connect_once():
-        attempts.append(1)
+    async def fake_connect_once(turn_mode="natural"):
+        attempts.append(turn_mode)
         yield "session"
 
     monkeypatch.setattr(client_module, "_connect_once", fake_connect_once)

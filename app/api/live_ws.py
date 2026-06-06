@@ -43,14 +43,14 @@ def _spawn_background(coro: Coroutine[Any, Any, Any]) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
-def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None]:
-    """解析并校验连接参数，返回 sessions 行的 (mode, sub_mode, scenario_case)。
+def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None, str]:
+    """解析并校验连接参数，返回 (mode, sub_mode, scenario_case, turn)。
 
     WS 侧 mode=ielts_a 映射存储层 mode='ielts' + sub_mode='exam'（方式 A 即
-    整场模拟考）；scenario 必带 case。turn=ptt|natural 仅校验（默认 natural，
-    连接时确定、会话中切换走重连）——PTT 的显式 turn_end 语义由后续
-    「PTT + 轮次结束」项接线，当前两种取值行为一致（Live 内建 VAD 断轮次）。
-    非法参数抛 ValueError（中文文案直接回给前端展示）。
+    整场模拟考）；scenario 必带 case。turn=ptt|natural（默认 natural）连接时
+    确定、会话中切换走重连：natural 走 Live 内建 VAD，ptt 关 VAD、由显式
+    turn_end 控制断轮次（bridge 接线）。非法参数抛 ValueError（中文文案直接
+    回给前端展示）。
     """
     params = websocket.query_params
     turn = params.get("turn", "natural")
@@ -58,12 +58,12 @@ def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None]:
         raise ValueError(f"turn 必须是 {sorted(VALID_TURN_MODES)} 之一")
     mode = params.get("mode")
     if mode == "ielts_a":
-        return "ielts", "exam", None
+        return "ielts", "exam", None, turn
     if mode == "scenario":
         case = params.get("case")
         if case not in VALID_SCENARIO_CASES:
             raise ValueError(f"scenario 模式需 case ∈ {sorted(VALID_SCENARIO_CASES)}")
-        return "scenario", None, case
+        return "scenario", None, case, turn
     raise ValueError("mode 必须是 ['ielts_a', 'scenario'] 之一")
 
 
@@ -71,7 +71,7 @@ def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None]:
 async def live_ws(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
-        mode, sub_mode, scenario_case = _parse_params(websocket)
+        mode, sub_mode, scenario_case, turn_mode = _parse_params(websocket)
     except ValueError as e:
         # 参数错属客户端 bug：回可读 error 后关闭，不碰 Live、不落会话行
         with suppress(Exception):
@@ -83,7 +83,7 @@ async def live_ws(websocket: WebSocket) -> None:
     tee: UserAudioTee | None = None
     ended = False
     try:
-        async with connect_live() as live_session:
+        async with connect_live(turn_mode) as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的
             # 会话不触发 judge（契约：仅 end_session 触发）：说过话的停在
             # recording 态留素材，零切片的在 finally 里清掉。
@@ -118,6 +118,7 @@ async def live_ws(websocket: WebSocket) -> None:
             await bridge(
                 websocket,
                 live_session,
+                turn_mode=turn_mode,
                 tee=tee,
                 on_end_session=_on_end_session,
             )

@@ -13,9 +13,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Gemini（Live / judge 后续复用；骨架阶段仅加载，暂不使用）
+    # Gemini（Live / judge 复用）
     gemini_api_key: str = ""
     gemini_proxy: str | None = None
+
+    # judge 用的多模态模型（结构化输出 + 听音频判发音）
+    judge_model: str = "gemini-2.5-flash"
 
     # SQLite 数据库文件路径（单写死 demo 用户的本地存储）
     db_path: str = "oral.db"

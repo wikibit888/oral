@@ -21,9 +21,9 @@
 - [x] 录音上传入口（`POST /recordings`，multipart WAV + {mode, sub_mode, scenario_case}）
 - [x] faster-whisper 切片转写（词级时间戳）
 - [x] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，**可单测、确定性**）
-- [ ] 结构化 judge（注入 descriptor / case prompt，temperature=0）
+- [~] 结构化 judge（注入 descriptor / case prompt，temperature=0）— 4a 完成（schema+prompt 组装），4b 待做（Gemini 调用）
 - [ ] 诊断层 + 雅思四维聚合 → 完整报告 JSON
-- [ ] `band_descriptors.md`（官方 descriptor，运行时注入）
+- [x] `band_descriptors.md`（官方 descriptor，运行时注入）
 
 ### P2 实时对话 ★（~5h）
 - [ ] WS 代理 Live
@@ -72,3 +72,4 @@
 - 2026-06-06 — P1 录音上传入口完成：`POST /recordings`（multipart WAV + {mode,sub_mode,scenario_case}）→ 校验（mode/子类一致性 + WAV 头）→ 落盘 `data/audio/{id}.wav` → 建 sessions 行（status=uploaded，duration 由 WAV 头算）。新增 `app/api/recordings.py`、`app/storage.py`、`app/crud.py`，加依赖 python-multipart。自测 6 用例（2 正常 + 4 校验错误）+ 落库/落盘全通过。下次做 P1 第 2 步：faster-whisper 切片转写（词级时间戳）。
 - 2026-06-06 — P1 faster-whisper 转写完成（**PR 模式**，分支 `feature/whisper-transcription`）：`app/transcribe.py` 提供 `transcribe(path)→Transcript`（词级时间戳 + 概率 + 语言 + 时长），VAD 关闭以保停顿信号，模型懒加载单例、config 可配（默认 small/cpu/int8/en）。加依赖 faster-whisper。自测：用 macOS say 生成语音转 16k/mono WAV，转写「I think science is mostly about curiosity.」7 词时间戳正确。下次做 P1 第 3 步：客观信号计算（语速/停顿/填充词/自我更正/词汇，可单测、确定性）。
 - 2026-06-06 — P1 客观信号计算完成（PR 模式，stacked 分支 `feature/objective-signals`，base=whisper 分支）：抽 `app/models.py`（Word/Transcript）让信号不依赖 ASR；`app/signals.py` 的 `compute_signals(words,duration)` 算语速(gross/articulation)、停顿(0.3s静默/1.0s犹豫/silence_ratio)、填充词密度、自我更正(启发式)、词汇(TTR/低频词(wordfreq)/重复度)，阈值命名常量。`tests/test_signals.py` 3 用例全过（含「同输入两次同输出」确定性断言）。加依赖 wordfreq + dev pytest，pyproject 配 pytest。待 PR #1 合并后本 PR base 自动转 main。下次做 P1 第 4 步：结构化 judge（注入 descriptor/case prompt，temperature=0）。
+- 2026-06-06 — P1 judge 第 1 部分完成（PR 模式，分支 `feature/judge-foundation`，base=main）：`app/report.py`（报告 pydantic schema，对齐 PRD §6.2，band 0–9 校验、情景 dimensions/overall 为 None）+ `app/judge/band_descriptors.md`（官方四维 descriptor，运行时注入）+ `app/judge/prompt.py` 的 `build_judge_prompt`（IELTS 注入 descriptor+四维、情景禁 band+case 接入点、grounding 规则=evidence 逐字/防幻觉/信号非成绩）。`tests/test_judge_prompt.py` 8 用例全过（连同信号共 11 个）。不含 LLM 调用、纯单测。下次做 P1 judge 第 2 部分（4b）：Gemini 结构化调用（temperature=0，喂 signals+transcript+音频）+ overall_band 聚合。

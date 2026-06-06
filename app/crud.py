@@ -74,7 +74,11 @@ def list_completed_reports() -> list[sqlite3.Row]:
 
 
 def add_session_duration(session_id: str, delta_s: float) -> None:
-    """累加会话时长（方式 B 逐题上传时同步累计，Library 展示 / review 判据用）。"""
+    """累加会话时长（Library 展示 / review 判据用）。
+
+    方式 B：逐题上传时同步累计（录音音频总长）；live：end_session 时单次
+    回填墙钟时长（建链→End，只触发一次）。两种模式各自语义下的「会话时长」。
+    """
     with get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET duration_s = COALESCE(duration_s, 0) + ? WHERE id = ?",

@@ -1,0 +1,105 @@
+{
+  "_comment": "雅思方式 B 静态题库（IELTS.md §3 / SCHEMA §6.5）。p2 同时充当方式 A 的 cue card 库（8 张，demo 可复现）。TTS 音频由脚本预生成到 data/tts/{id}.wav，GET /questions 按文件存在性回填 tts_url。",
+  "p1": [
+    { "id": "p1-01", "text": "Where is your hometown, and what do you like most about it?" },
+    { "id": "p1-02", "text": "Do you work or are you a student? What do you enjoy about it?" },
+    { "id": "p1-03", "text": "What do you usually do in your free time?" },
+    { "id": "p1-04", "text": "What kind of food do you like? Do you prefer eating at home or eating out?" },
+    { "id": "p1-05", "text": "How do you usually spend your weekends?" },
+    { "id": "p1-06", "text": "Do you prefer sunny days or rainy days? Why?" },
+    { "id": "p1-07", "text": "How often do you use your mobile phone, and what do you mainly use it for?" },
+    { "id": "p1-08", "text": "Do you keep in touch with your old friends? How?" }
+  ],
+  "p2": [
+    {
+      "id": "p2-01",
+      "text": "Describe a skill you would like to learn.",
+      "bullets": [
+        "what the skill is",
+        "why you want to learn it",
+        "how you would learn it",
+        "and explain how it would help you"
+      ]
+    },
+    {
+      "id": "p2-02",
+      "text": "Describe a memorable trip you have taken.",
+      "bullets": [
+        "where you went",
+        "who you went with",
+        "what you did there",
+        "and explain why it was memorable"
+      ]
+    },
+    {
+      "id": "p2-03",
+      "text": "Describe a person you admire.",
+      "bullets": [
+        "who the person is",
+        "how you know them",
+        "what qualities they have",
+        "and explain why you admire them"
+      ]
+    },
+    {
+      "id": "p2-04",
+      "text": "Describe an app or piece of technology you find useful.",
+      "bullets": [
+        "what it is",
+        "how you use it",
+        "how often you use it",
+        "and explain why you find it useful"
+      ]
+    },
+    {
+      "id": "p2-05",
+      "text": "Describe a book or film that left a strong impression on you.",
+      "bullets": [
+        "what it was about",
+        "when you read or watched it",
+        "why you chose it",
+        "and explain why it impressed you"
+      ]
+    },
+    {
+      "id": "p2-06",
+      "text": "Describe a special meal you have had.",
+      "bullets": [
+        "what the occasion was",
+        "who you shared it with",
+        "what you ate",
+        "and explain why it was special"
+      ]
+    },
+    {
+      "id": "p2-07",
+      "text": "Describe a place where you like to relax.",
+      "bullets": [
+        "where it is",
+        "how often you go there",
+        "what you do there",
+        "and explain why it helps you relax"
+      ]
+    },
+    {
+      "id": "p2-08",
+      "text": "Describe an important decision you have made.",
+      "bullets": [
+        "what the decision was",
+        "when you made it",
+        "what other choices you had",
+        "and explain why it was important"
+      ]
+    }
+  ],
+  "p3": [
+    { "id": "p3-01", "text": "Why do some people give up learning new skills quickly?" },
+    { "id": "p3-02", "text": "Should schools focus more on practical skills than academic knowledge?" },
+    { "id": "p3-03", "text": "How has technology changed the way people learn?" },
+    { "id": "p3-04", "text": "Does travelling really broaden a person's mind, or is that overstated?" },
+    { "id": "p3-05", "text": "What kinds of people become role models in modern society, and is that healthy?" },
+    { "id": "p3-06", "text": "Are people becoming too dependent on smartphones in daily life?" },
+    { "id": "p3-07", "text": "Why do you think food plays such an important role in every culture?" },
+    { "id": "p3-08", "text": "Should big cities invest more in parks and quiet public spaces? Why or why not?" }
+  ]
+}

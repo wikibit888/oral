@@ -31,7 +31,6 @@ DIAGNOSTIC_INSTRUCTIONS = """\
 - frequent_errors：高频错误，带 category（grammar / vocabulary / ...）、desc、count。
 - fossilized_errors：反复犯的硬错，occurrences 列逐字原话。
 - self_corrections：自我更正的正向例子（initial → corrected，逐字）。
-- vocabulary_diversity_pct：词汇多样度百分比（可参考客观信号里的 TTR）。
 - top_priorities：3–5 条最关键问题，每条 title + severity(high/medium/low) + explanation + examples(逐字) + quick_fix。
 - rewrites：挑 2–3 段考生说过的不够好的话，并排给出 {original(逐字), rewrite, reason}。\
 """

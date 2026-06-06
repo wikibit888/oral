@@ -15,15 +15,15 @@
 - [x] React 前端骨架（实现归 `TODO.frontend.md`；此处勾选 = 功能验证 + code review 通过）——2026-06-06 验证：功能 PASS；review findings（🔴C1 recorder 泄漏 / 🔴C2 toFixed null / 🟡W1 AbortController / 🟡W4 mode 串 pin / 🟡W5 detail [object Object] / 🟡W6 48k 主路径测试）已全部修复，复审 **PASS**（vitest 42 绿 + build + lint 过）
 
 ### P1 评测流水线 ★（~6h，护城河）
-- [ ] faster-whisper 切片转写（词级时间戳） done
-- [ ] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，可单测、确定性） done
-- [ ] 结构化 judge（注入 descriptor / case prompt，temperature=0） done
-- [ ] 诊断层 + 雅思四维聚合 → 完整报告 JSON done
-- [ ] `band_descriptors.md`（官方 descriptor，运行时注入） done
-- [ ] **增量流水线改造**：逐回合 / 逐题后台转写 + 信号（会话内执行），课后只剩一次 judge 调用 → 报告 ≤5s（SCHEMA §3）
-- [ ] 切片预上传 Files API；judge 只喂 2–3 段最长用户切片判发音
-- [ ] 后端回填字段收口：`vocabulary_diversity_pct`（TTR）由后端计算填入，judge schema 移除（practice_summary 已回填）
-- [ ] `error_rate` 计算落库（judge frequent_errors 总次数 / 转写百词；当前留 NULL）
+- [x] faster-whisper 切片转写（词级时间戳） done
+- [x] 客观信号计算（语速 / 停顿 / 填充词 / 自我更正 / 词汇，可单测、确定性） done
+- [x] 结构化 judge（注入 descriptor / case prompt，temperature=0） done
+- [x] 诊断层 + 雅思四维聚合 → 完整报告 JSON done
+- [x] `band_descriptors.md`（官方 descriptor，运行时注入） done
+- [x] **增量流水线改造**：逐回合 / 逐题后台转写 + 信号（会话内执行），课后只剩一次 judge 调用 → 报告 ≤5s（SCHEMA §3）——2026-06-06 `ingest_clip` + `finalize_session` + `merge_transcripts`，turns 表存切片级转写
+- [x] 切片预上传 Files API；judge 只喂 2–3 段最长用户切片判发音——`upload_clip`（失败降级 inline bytes）+ `select_pronunciation_clips`，真冒烟 file_uri 落库验证
+- [x] 后端回填字段收口：`vocabulary_diversity_pct`（TTR）由后端计算填入，judge schema 移除（practice_summary 已回填）——`JudgeReport`/`JudgeDiagnostics` 收口，对前端 Report shape 不变
+- [x] `error_rate` 计算落库（judge frequent_errors 总次数 / 转写百词）——空转写为 NULL
 
 ### P2 实时对话 ★（~5h）
 - [ ] WS 代理 Live（代码完成 + review PASS + 真冒烟通过；在 `feature/live-ws-proxy` 分支未提交，PR 挂起等联调重点 case 测完）
@@ -83,5 +83,6 @@
 > 每次收工追加一行：`YYYY-MM-DD — 做了什么 / 卡在哪 / 下次从哪开始`。
 
 2026-06-06 — P0 全部完成并勾选：后端四项复验（pytest 61 绿 / FastAPI 冒烟 /health OK / SQLite 三表齐 / gemini_live.py 完好）；前端骨架 review findings C1/C2/W1/W4/W5/W6 修复（vitest 42 绿 + build + lint），code-reviewer 复审 PASS；统一 PR 提交 / 无阻塞 / 下次从 P1 增量流水线或 P2 事件转发补全开始
+2026-06-06 — P1 全部完成并勾选：增量流水线（ingest_clip/finalize_session/merge_transcripts + turns 落转写）、Files API 预上传 + 2–3 段最长切片、JudgeReport schema 收口（TTR 后端回填）、error_rate 落库；pytest 78 绿 + 真冒烟（真 whisper/Gemini/Files API，band 聚合·planted 错误·file_uri·error_rate 全验证）+ review PASS / 无阻塞 / 下次从 P2 事件转发补全（interrupted/turn_complete/session_started）开始
 
 

@@ -1,18 +1,20 @@
-"""课后流水线编排 + 落库单测。
+"""评测流水线（增量架构）编排 + 落库单测。
 
-transcribe / run_judge 被 mock（零网络、不下载 whisper 权重），只验证：
-串联顺序、正规化列抽取、状态机推进、失败不写半份报告。DB 用临时文件隔离。
+transcribe / run_judge / upload_clip 被 mock（零网络、不下载 whisper 权重），只验证：
+增量串联（ingest_clip → finalize_session）、合并逻辑、正规化列抽取（含 error_rate）、
+状态机推进、失败不写半份报告。DB 用临时文件隔离。
 """
 
 import pytest
 
 from app import crud, db, pipeline
 from app.config import settings
-from app.models import Transcript, Word
+from app.models import Transcript, Word, transcript_from_json
 from app.report import (
     Diagnostics,
     Dimension,
     Dimensions,
+    FrequentError,
     PracticeSummary,
     Report,
     SyntacticAnalysis,
@@ -39,10 +41,10 @@ def tmp_db(tmp_path, monkeypatch):
     yield
 
 
-def _diag() -> Diagnostics:
+def _diag(frequent_errors=()) -> Diagnostics:
     return Diagnostics(
         common_patterns=[], syntactic_analysis=SyntacticAnalysis(observation="o", suggestion="s"),
-        frequent_errors=[], fossilized_errors=[], self_corrections=[],
+        frequent_errors=list(frequent_errors), fossilized_errors=[], self_corrections=[],
         vocabulary_diversity_pct=80.0, top_priorities=[], rewrites=[],
     )
 
@@ -51,14 +53,14 @@ def _dim(b: float) -> Dimension:
     return Dimension(band=b, evidence=["x"], descriptor_match="m", suggestions=["s"])
 
 
-def _ielts_report() -> Report:
+def _ielts_report(frequent_errors=()) -> Report:
     dims = Dimensions(
         fluency_coherence=_dim(6.0), lexical_resource=_dim(6.5),
         grammatical_range_accuracy=_dim(6.0), pronunciation=_dim(7.0),
     )
     return Report(
         practice_summary=PracticeSummary(speaking_time_s=0, sessions=1, recordings=1),
-        dimensions=dims, overall_band=6.5, diagnostics=_diag(),
+        dimensions=dims, overall_band=6.5, diagnostics=_diag(frequent_errors),
     )
 
 
@@ -86,10 +88,11 @@ def _seed_session(mode, sub_mode=None, scenario_case=None, audio_path="/fake.wav
     )
 
 
-def _patch_stages(monkeypatch, report):
-    """把 transcribe / run_judge 换成 canned 实现，捕获 run_judge 收到的 kwargs。"""
+def _patch_stages(monkeypatch, report, file_uri=None, transcript=TR):
+    """把 transcribe / upload_clip / run_judge 换成 canned 实现，捕获 run_judge kwargs。"""
     captured = {}
-    monkeypatch.setattr(pipeline, "transcribe", lambda path: TR)
+    monkeypatch.setattr(pipeline, "transcribe", lambda path: transcript)
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: file_uri)
 
     def fake_run_judge(**kw):
         captured.update(kw)
@@ -99,9 +102,10 @@ def _patch_stages(monkeypatch, report):
     return captured
 
 
+# —— 一次性入口（旧 POST /recordings 路径，单切片走增量机制）—— #
 def test_ielts_pipeline_persists_normalized_columns(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p2")
-    captured = _patch_stages(monkeypatch, _ielts_report())
+    _patch_stages(monkeypatch, _ielts_report())
 
     pipeline.process_session("s1")
 
@@ -120,7 +124,7 @@ def test_ielts_pipeline_persists_normalized_columns(tmp_db, monkeypatch):
     assert row["silence_ratio"] == sig.pauses.silence_ratio
     assert row["filler_pm"] == sig.filler_per_min
     assert row["ttr"] == sig.type_token_ratio
-    assert row["error_rate"] is None              # 无确定性来源，留空
+    assert row["error_rate"] == 0.0               # 无 frequent_errors → 0 每百词
 
     # 完整报告 JSON 可往返
     rep = Report.model_validate_json(row["report_json"])
@@ -128,17 +132,36 @@ def test_ielts_pipeline_persists_normalized_columns(tmp_db, monkeypatch):
     assert rep.diagnostics.vocabulary_diversity_pct == 80.0
 
 
-def test_pipeline_passes_session_fields_to_judge(tmp_db, monkeypatch):
-    _seed_session("ielts", sub_mode="module_p3")
-    captured = _patch_stages(monkeypatch, _ielts_report())
+def test_error_rate_persisted_per_100_words(tmp_db, monkeypatch):
+    # error_rate = frequent_errors 总次数 / 转写词数 ×100：(2+1)/5×100 = 60.0
+    _seed_session("ielts", sub_mode="module_p1")
+    errors = [
+        FrequentError(category="grammar", desc="三单一致", count=2),
+        FrequentError(category="vocabulary", desc="搭配", count=1),
+    ]
+    _patch_stages(monkeypatch, _ielts_report(frequent_errors=errors))
 
     pipeline.process_session("s1")
 
-    # judge 收到会话上下文 + 用 WAV 头时长复算的信号
+    assert crud.get_report("s1")["error_rate"] == 60.0
+
+
+def test_pipeline_passes_session_fields_and_clips_to_judge(tmp_db, monkeypatch):
+    _seed_session("ielts", sub_mode="module_p3")
+    captured = _patch_stages(monkeypatch, _ielts_report(), file_uri="files/abc")
+
+    pipeline.process_session("s1")
+
+    # judge 收到会话上下文 + 切片引用（含预上传 URI）+ 合并信号
     assert captured["mode"] == "ielts"
     assert captured["sub_mode"] == "module_p3"
-    assert captured["audio_path"] == "/fake.wav"
     assert captured["signals"].duration_s == DURATION
+    clips = captured["clips"]
+    assert len(clips) == 1
+    assert clips[0].path == "/fake.wav"
+    assert clips[0].file_uri == "files/abc"
+    assert clips[0].duration_s == DURATION
+    assert captured["recordings"] == 1
 
 
 def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):
@@ -175,6 +198,7 @@ def test_unscorable_ielts_persists_done_with_flag(tmp_db, monkeypatch):
 
 def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p1")
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
 
     def boom(path):
         raise RuntimeError("whisper 挂了")
@@ -186,6 +210,25 @@ def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch)
 
     assert crud.get_session("s1")["status"] == "failed"
     assert crud.get_report("s1") is None          # 不留半份报告
+
+
+def test_judge_failure_in_finalize_marks_failed_no_report(tmp_db, monkeypatch):
+    # review 补漏：ingest 成功、finalize 阶段 run_judge 失败——走的是 finalize_session
+    # 自己的 except（不是 process_session 的），仍须 failed + 不写半份报告。
+    _seed_session("ielts", sub_mode="module_p1")
+    monkeypatch.setattr(pipeline, "transcribe", lambda path: TR)
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
+
+    def judge_boom(**kw):
+        raise RuntimeError("judge 挂了")
+
+    monkeypatch.setattr(pipeline, "run_judge", judge_boom)
+
+    with pytest.raises(RuntimeError, match="judge 挂了"):
+        pipeline.process_session("s1")
+
+    assert crud.get_session("s1")["status"] == "failed"
+    assert crud.get_report("s1") is None
 
 
 def test_pipeline_missing_session_raises(tmp_db):
@@ -205,7 +248,7 @@ def test_pipeline_missing_audio_raises_before_processing(tmp_db, monkeypatch):
 
 def test_pipeline_reprocess_is_idempotent(tmp_db, monkeypatch):
     _seed_session("ielts", sub_mode="module_p2")
-    _patch_stages(monkeypatch, _ielts_report())
+    captured = _patch_stages(monkeypatch, _ielts_report())
 
     pipeline.process_session("s1")
     pipeline.process_session("s1")                 # 重跑不报错、不重复行
@@ -213,4 +256,114 @@ def test_pipeline_reprocess_is_idempotent(tmp_db, monkeypatch):
     assert crud.get_session("s1")["status"] == "done"   # 第二次也正常收尾到 done
     with db.get_connection() as conn:
         n = conn.execute("SELECT COUNT(*) AS n FROM reports WHERE session_id = ?", ("s1",)).fetchone()["n"]
+        t = conn.execute("SELECT COUNT(*) AS n FROM turns WHERE session_id = ?", ("s1",)).fetchone()["n"]
     assert n == 1
+    assert t == 1                                  # 重跑前清旧 turns，词序列不翻倍
+    assert len(captured["clips"]) == 1
+
+
+# —— 增量入口：ingest_clip + finalize_session —— #
+def _clip_tr(text: str, words: list[Word], duration: float) -> Transcript:
+    return Transcript(text=text, language="en", duration=duration, words=words)
+
+
+CLIP1 = _clip_tr("i think", [Word("i", 0.0, 0.2, 0.9), Word("think", 0.2, 0.6, 0.9)], 1.0)
+CLIP2 = _clip_tr(
+    "science is curiosity",
+    [Word("science", 0.1, 0.6, 0.9), Word("is", 0.6, 0.8, 0.9), Word("curiosity", 2.0, 2.9, 0.9)],
+    3.0,
+)
+
+
+def test_ingest_clip_persists_turn_with_transcript_and_uri(tmp_db, monkeypatch):
+    _seed_session("ielts", sub_mode="module_p2", audio_path=None)
+    monkeypatch.setattr(pipeline, "transcribe", lambda path: CLIP1)
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: "files/u1")
+
+    turn_id = pipeline.ingest_clip("s1", "/clip1.wav", start_ts=10.0, end_ts=11.0)
+
+    rows = crud.list_processed_user_turns("s1")
+    assert [r["id"] for r in rows] == [turn_id]
+    row = rows[0]
+    assert row["text"] == "i think"
+    assert row["file_uri"] == "files/u1"
+    assert row["clip_path"] == "/clip1.wav"
+    assert (row["start_ts"], row["end_ts"]) == (10.0, 11.0)
+    restored = transcript_from_json(row["transcript_json"])
+    assert restored == CLIP1                       # 词时间戳无损往返
+
+
+def test_ingest_clip_missing_session_raises(tmp_db, monkeypatch):
+    monkeypatch.setattr(pipeline, "transcribe", lambda path: CLIP1)
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
+    with pytest.raises(ValueError, match="不存在"):
+        pipeline.ingest_clip("nope", "/clip.wav")
+
+
+def test_incremental_two_clips_then_finalize(tmp_db, monkeypatch):
+    """逐题 ingest 两段切片 → finalize 只剩一次 judge：信号按合并词序列计算。"""
+    _seed_session("ielts", sub_mode="module_p2", audio_path=None)
+    transcripts = iter([CLIP1, CLIP2])
+    monkeypatch.setattr(pipeline, "transcribe", lambda path: next(transcripts))
+    monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
+    captured = {}
+
+    def fake_run_judge(**kw):
+        captured.update(kw)
+        return _ielts_report()
+
+    monkeypatch.setattr(pipeline, "run_judge", fake_run_judge)
+
+    pipeline.ingest_clip("s1", "/clip1.wav")
+    pipeline.ingest_clip("s1", "/clip2.wav")
+    pipeline.finalize_session("s1")
+
+    assert crud.get_session("s1")["status"] == "done"
+    # judge 收到合并 transcript + 按合并词序列复算的信号 + 两段切片引用
+    merged = pipeline.merge_transcripts([CLIP1, CLIP2])
+    assert captured["transcript"].text == "i think science is curiosity"
+    assert captured["signals"] == compute_signals(merged.words, merged.duration)
+    assert [c.path for c in captured["clips"]] == ["/clip1.wav", "/clip2.wav"]
+    assert captured["recordings"] == 2
+    # 正规化列与报告落库
+    row = crud.get_report("s1")
+    assert row is not None
+    assert row["wpm"] == compute_signals(merged.words, merged.duration).gross_wpm
+
+
+def test_finalize_without_processed_turns_fails(tmp_db, monkeypatch):
+    _seed_session("ielts", sub_mode="module_p2", audio_path=None)
+    with pytest.raises(ValueError, match="无已转写的用户切片"):
+        pipeline.finalize_session("s1")
+    assert crud.get_session("s1")["status"] == "failed"
+
+
+# —— merge_transcripts —— #
+def test_merge_transcripts_offsets_and_duration():
+    merged = pipeline.merge_transcripts([CLIP1, CLIP2])
+    assert merged.duration == 4.0                  # Σ 切片时长
+    assert merged.text == "i think science is curiosity"
+    # 第二段整体平移 1.0（CLIP1 的 duration）
+    assert [round(w.start, 3) for w in merged.words] == [0.0, 0.2, 1.1, 1.6, 3.0]
+    # 切片内部停顿保留：CLIP2 内 is(0.8)→curiosity(2.0) 的 1.2s 犹豫平移后仍是 1.2s
+    assert round(merged.words[4].start - merged.words[3].end, 3) == 1.2
+
+
+def test_merge_transcripts_boundary_gap_is_real_user_silence():
+    # 衔接处 gap = 前段尾部静默(1.0-0.6=0.4) + 后段起始静默(0.1) = 0.5 —— 计入停顿
+    merged = pipeline.merge_transcripts([CLIP1, CLIP2])
+    sig = compute_signals(merged.words, merged.duration)
+    assert sig.pauses.silence_count == 2           # 边界 0.5s + CLIP2 内 1.2s
+    assert sig.pauses.hesitation_count == 1        # 仅 1.2s 达犹豫阈值
+
+
+def test_merge_transcripts_single_clip_is_identity():
+    merged = pipeline.merge_transcripts([TR])
+    assert merged == TR
+
+
+def test_merge_transcripts_empty_list():
+    merged = pipeline.merge_transcripts([])
+    assert merged.words == []
+    assert merged.text == ""
+    assert merged.duration == 0.0

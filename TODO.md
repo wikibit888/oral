@@ -51,9 +51,8 @@
 
 ### P5 情景对话 case（~1.5h）
 - [ ] 接入 Live 会话页（复用 P2 代理；无状态机；手动 End + persona 自然收尾；Live 挂直接报错）
-- [ ] 点餐 persona prompt + judge prompt
-- [ ] 会议 persona prompt + judge prompt
-- [ ] ask_help 破壁：控制事件 → 导演提示注入，persona 临时破壁后回角色（方式 A 隐藏按钮）
+- [x] 点餐 persona prompt + judge prompt——2026-06-07 PR #21：`app/scenario_cases.py` case 注册表（persona + judge_focus，加 case 只改注册表；白名单推导 + finalize 回填 case_prompt）；真冒烟守角色 + 自然收尾、judge 命中点餐侧重且零 band 泄漏
+- [x] 会议 persona prompt + judge prompt——随 PR #21：meeting persona 礼貌质疑追问 blocker、收尾确认行动项，真冒烟过
 - [ ] case 选择页（验证 + review）
 
 ### P6 报告 + 进步 UI（~4h）
@@ -78,6 +77,7 @@
 ### 拓展（最后优化，不在 24h 主线）
 - [ ] 雅思原题库：`ielts_questions` 表 + 录入/查询/删除接口；`GET /questions` 优先原题库、回退静态库（SCHEMA §7）
 - [ ] SSE 流式报告 `GET /reports/{id}/stream`（报告态逐段填充；未实现前轮询兜底）
+- [ ] ask_help 破壁：控制事件 → 导演提示注入，persona 临时破壁后回角色（方式 A 隐藏按钮；2026-06-07 自 P5 移入——persona 已内置方括号指令规则，接线即用）
 
 ## 进度日志
 
@@ -93,5 +93,6 @@
 2026-06-07 — **P4 后端五项全部完成**（PR #16/#17/#18/#19，#15 已先行）：数据模型升级（settings/is_seed/status 枚举+user_version 门控迁移）→ 会话化接口（POST /sessions 族，竞态关死/重录去重）→ judge 按 sub_mode（方式 B 无数字 band、可评性只看诊断层）→ TTS 预生成（24/24 真跑全生成）。pytest 163 绿；四轮独立 review（两轮 NEEDS-FIX 阻断项均修复后复审 PASS）；三次真冒烟（方式 B 双题 38s 报告/B 无 band 12s/TTS 回填 200）。判断记录：gemini-2.5-flash 间歇 503 风暴，B 冒烟改 JUDGE_MODEL=flash-lite 绕行验证（生产默认不动）。**BREAKING 汇总待 handoff/inbox/004**：status 枚举改名、POST /recordings→/sessions 族、B 报告无 band。下次：投递 handoff 004 → P3 导演状态机（live 巷道已清）
 2026-06-07 — P4 第 4 项题库完成并勾选（PR #15，连带勾 P3 第 3 项 cue card 库）：data/questions.json p1×8/p2×8 cue cards/p3×8 + GET /questions?part=（中文 422、id 内容 pin）+ /static/tts 挂载（tts_url 按文件存在性逐请求回填，TTS 落地免重启）；pytest 130 绿 + review NEEDS-FIX(C1 挂载缺失+W1-W5)→全修。与并行会话 PR #14 同窗零冲突（巷道隔离）。下次：P4b 数据模型升级（settings 表+is_seed+status 枚举）→ P4c 会话化接口 → P4d judge 按 sub_mode → P4e TTS 预生成；方式 B 后端齐后一次性 handoff 前端
 2026-06-07 — P2 第 5、7 项完成并勾选（**P2 全部完成**）：PTT（turn=ptt 关内建 VAD + 上行首帧 activity_start + turn_end→activity_end，natural 误发 turn_end 忽略不断流）+ 延迟徽章（LatencyMeter 相位机：ptt 以 turn_end 为停说点、natural 以最后非静音帧近似，考官首帧发 latency_ms 一轮一次）；pytest 130 绿（+16 用例，假时钟确定性）+ 真冒烟（ptt VAD 关实锤·latency 894ms / natural 2299ms）+ review PASS（warning/建议已修）/ judge 上游 503 持续未恢复（与本变更无关）/ 下次从 P3 导演状态机或 P4 方式 B 开始
+2026-06-07 — **P5 后端两项完成并勾选**（PR #21）：`app/scenario_cases.py` case 注册表（ordering/meeting persona + judge 侧重段；/ws/live 白名单由注册表推导、finalize 回填 case_prompt、未知 case 降级占位不 failed；persona 内置方括号指令规则为拓展项 ask_help 预留接线）。pytest 183 绿（+8）+ 三轮真冒烟（judge 无 band 命中点餐侧重·planted "want eat" 捕获 / ordering·meeting persona 真 Live 守角色 + 自然收尾）+ review PASS。ask_help 破壁按用户决策移入拓展区（不在 24h 主线）；handoff/inbox/006 情景前端接入契约已投递。下次：P6 后端件 PR-A（GET /sessions + GET /progress + settings API）
 
 

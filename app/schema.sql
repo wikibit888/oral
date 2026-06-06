@@ -16,15 +16,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
 
--- 每个对话回合（用户 / 考官 / persona），含课后切片用的时间戳与音频片段
+-- 每个对话回合（用户 / 考官 / persona），含课后切片用的时间戳与音频片段。
+-- 增量流水线（SCHEMA §3）：切片落地即后台转写 + Files API 预上传，结果挂本行；
+-- 会话结束 finalize 只剩一次 judge 调用。
 CREATE TABLE IF NOT EXISTS turns (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
-    role       TEXT NOT NULL,                                    -- user | examiner | persona
-    text       TEXT,                                             -- 转写文本
-    start_ts   REAL,                                             -- 相对会话起点的秒数（单调时钟）
-    end_ts     REAL,
-    clip_path  TEXT                                              -- 该回合用户音频切片
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,                               -- user | examiner | persona
+    text            TEXT,                                        -- 转写文本
+    start_ts        REAL,                                        -- 相对会话起点的秒数（单调时钟）
+    end_ts          REAL,
+    clip_path       TEXT,                                        -- 该回合用户音频切片
+    transcript_json TEXT,                                        -- 切片级词时间戳转写（增量产物）
+    file_uri        TEXT                                         -- Files API 预上传 URI（judge 引用）
 );
 
 CREATE INDEX IF NOT EXISTS idx_turns_session_id ON turns (session_id);

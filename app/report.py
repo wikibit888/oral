@@ -69,15 +69,38 @@ class Rewrite(BaseModel):
     reason: str
 
 
-class Diagnostics(BaseModel):
+class JudgeDiagnostics(BaseModel):
+    """judge 结构化输出的诊断层：只含 LLM 真正该产出的字段。
+
+    vocabulary_diversity_pct 不在此处——它就是客观信号的 TTR×100，由后端确定性
+    回填（P1 收口），让 LLM 产出徒增漂移面。
+    """
+
     common_patterns: list[CommonPattern]
     syntactic_analysis: SyntacticAnalysis
     frequent_errors: list[FrequentError]
     fossilized_errors: list[FossilizedError]
     self_corrections: list[SelfCorrectionItem]
-    vocabulary_diversity_pct: float
     top_priorities: list[TopPriority]
     rewrites: list[Rewrite]
+
+
+class Diagnostics(JudgeDiagnostics):
+    """完整诊断层（对前端的 Report shape）：judge 产出 + 后端回填字段。"""
+
+    vocabulary_diversity_pct: float | None = None   # 后端回填（TTR×100），judge 不产出
+
+
+class JudgeReport(BaseModel):
+    """judge 结构化输出 schema（response_schema 用，P1 收口）。
+
+    只让 LLM 产出 dimensions + 诊断层。practice_summary / overall_band /
+    unscorable* / vocabulary_diversity_pct 全部由系统确定性设置或回填——
+    不进 judge schema，LLM 想填也没地方填。
+    """
+
+    dimensions: Dimensions | None = None   # 仅雅思；judge 拒评时为 None
+    diagnostics: JudgeDiagnostics
 
 
 class Report(BaseModel):

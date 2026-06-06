@@ -45,6 +45,56 @@ def update_session_status(session_id: str, status: str) -> None:
         )
 
 
+def create_turn(
+    *,
+    session_id: str,
+    role: str,
+    clip_path: str | None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
+) -> int:
+    """插入一个回合（切片落地时建行，转写结果稍后回填），返回自增 id。"""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO turns (session_id, role, clip_path, start_ts, end_ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, clip_path, start_ts, end_ts),
+        )
+        return cur.lastrowid
+
+
+def finish_turn(
+    turn_id: int,
+    *,
+    text: str,
+    transcript_json: str,
+    file_uri: str | None,
+) -> None:
+    """回填一个回合的增量流水线产物（转写文本 + 词时间戳 + Files API URI）。"""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE turns SET text = ?, transcript_json = ?, file_uri = ? WHERE id = ?",
+            (text, transcript_json, file_uri, turn_id),
+        )
+
+
+def list_processed_user_turns(session_id: str) -> list[sqlite3.Row]:
+    """取一个会话已完成转写的用户回合（finalize 合并信号 + 选切片用），按落地顺序。"""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM turns "
+            "WHERE session_id = ? AND role = 'user' AND transcript_json IS NOT NULL "
+            "ORDER BY id",
+            (session_id,),
+        ).fetchall()
+
+
+def delete_turns(session_id: str) -> None:
+    """清空一个会话的全部回合（一次性入口重跑流水线时保证幂等）。"""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+
+
 def create_report(
     *,
     session_id: str,

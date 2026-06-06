@@ -47,4 +47,7 @@ handoff/
 
 # 上传的录音 / 切片（运行时生成）
 data/audio/
+
+# 预生成 TTS 题库音频（python -m app.tts 产物）
+data/tts/
 .gstack/

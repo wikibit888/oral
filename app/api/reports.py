@@ -16,7 +16,7 @@ router = APIRouter(tags=["reports"])
 class ReportResponse(BaseModel):
     id: str
     mode: str
-    status: str                      # uploaded | processing | done | failed
+    status: str                      # recording(Live 会话中) | uploaded | processing | done | failed
     report: Report | None = None     # 仅 status=done 且报告已落库时有值
 
 

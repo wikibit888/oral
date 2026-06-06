@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # judge 用的多模态模型（结构化输出 + 听音频判发音）
     judge_model: str = "gemini-2.5-flash"
 
+    # 实时对话用的 Live 模型（WS 双向音频流：16k PCM 上行 / 24k PCM 下行）
+    live_model: str = "gemini-3.1-flash-live-preview"
+
     # SQLite 数据库文件路径（单写死 demo 用户的本地存储）
     db_path: str = "oral.db"
 

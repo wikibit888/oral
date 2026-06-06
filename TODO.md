@@ -26,9 +26,9 @@
 - [x] `error_rate` 计算落库（judge frequent_errors 总次数 / 转写百词）——空转写为 NULL
 
 ### P2 实时对话 ★（~5h）
-- [ ] WS 代理 Live（代码完成 + review PASS + 真冒烟通过；在 `feature/live-ws-proxy` 分支未提交，PR 挂起等联调重点 case 测完）
-- [ ] 事件转发补全：`interrupted` / `turn_complete`（barge-in 前端清播放队列）+ 建链 `session_started {session_id}`（契约 FRONTEND §5）
-- [ ] /ws/live 连接参数：`mode=ielts_a|scenario & case & turn=ptt|natural`；`end_session` 自动触发 judge
+- [x] WS 代理 Live（双向音频桥 + 转写事件；review PASS + 真冒烟通过）——2026-06-06 随前三项统一 PR 提交
+- [x] 事件转发补全：`interrupted` / `turn_complete`（barge-in 前端清播放队列）+ 建链 `session_started {session_id}`（契约 FRONTEND §5）——真冒烟 turn_complete 真实到达
+- [x] /ws/live 连接参数：`mode=ielts_a|scenario & case & turn=ptt|natural`；`end_session` 自动触发 judge——参数校验 + sessions 落库（status=recording）；turn=ptt 仅校验，turn_end 语义归「PTT + 轮次结束」项；tee 未接线前 finalize 无切片落 failed 属预期
 - [ ] AudioWorklet → 16k 上传 → Live → 24k 播放（前端 F6 + 联调）
 - [ ] PTT + 轮次结束
 - [ ] 用户音频 tee + 帧时间戳（供回合切片，喂增量流水线）
@@ -84,5 +84,6 @@
 
 2026-06-06 — P0 全部完成并勾选：后端四项复验（pytest 61 绿 / FastAPI 冒烟 /health OK / SQLite 三表齐 / gemini_live.py 完好）；前端骨架 review findings C1/C2/W1/W4/W5/W6 修复（vitest 42 绿 + build + lint），code-reviewer 复审 PASS；统一 PR 提交 / 无阻塞 / 下次从 P1 增量流水线或 P2 事件转发补全开始
 2026-06-06 — P1 全部完成并勾选：增量流水线（ingest_clip/finalize_session/merge_transcripts + turns 落转写）、Files API 预上传 + 2–3 段最长切片、JudgeReport schema 收口（TTR 后端回填）、error_rate 落库；pytest 78 绿 + 真冒烟（真 whisper/Gemini/Files API，band 聚合·planted 错误·file_uri·error_rate 全验证）+ review PASS / 无阻塞 / 下次从 P2 事件转发补全（interrupted/turn_complete/session_started）开始
+2026-06-06 — P2 前三项完成并勾选：WS 代理提交 + interrupted/turn_complete/session_started 事件转发 + 连接参数校验（mode/case/turn ↦ sessions 落库）+ end_session 瞬时调度 finalize（回调在消费控制消息当下建独立 task，不依赖断连后协程存活）；pytest 90 绿 + 真冒烟（真 Live：session_started 首发·双向转写·387KB 下行音频·turn_complete 到达·end_session 后状态离开 recording）+ review PASS（W1/W3/W4/S1-S3 已修）/ 无阻塞 / 下次从 P2 第 4 项（前端 F6 联调）或音频 tee + 帧时间戳开始
 
 

@@ -67,10 +67,10 @@ def test_get_report_while_processing_has_no_report(client):
     assert body["report"] is None
 
 
-def test_get_report_done_returns_full_report(client):
+def test_get_report_completed_returns_full_report(client):
     crud.create_session(
         session_id="d1", mode="scenario", sub_mode=None, scenario_case="ordering",
-        audio_path="/x.wav", duration_s=3.0, status="done",
+        audio_path="/x.wav", duration_s=3.0, status="completed",
     )
     crud.create_report(
         session_id="d1", mode="scenario", overall_band=None,
@@ -79,20 +79,20 @@ def test_get_report_done_returns_full_report(client):
         report_json=_report_json(),
     )
     body = client.get("/reports/d1").json()
-    assert body["status"] == "done"
+    assert body["status"] == "completed"
     assert body["mode"] == "scenario"
     assert body["report"]["diagnostics"]["vocabulary_diversity_pct"] == 75.0
     assert body["report"]["overall_band"] is None
 
 
-def test_get_report_done_but_no_report_row(client):
-    # 边界：状态已 done 但 reports 行缺失（如置 done 后报告被清）——接口不崩，report 为 null
+def test_get_report_completed_but_no_report_row(client):
+    # 边界：状态已 completed 但 reports 行缺失——接口不崩，report 为 null
     crud.create_session(
         session_id="d2", mode="ielts", sub_mode="module_p2", scenario_case=None,
-        audio_path="/x.wav", duration_s=3.0, status="done",
+        audio_path="/x.wav", duration_s=3.0, status="completed",
     )
     body = client.get("/reports/d2").json()
-    assert body["status"] == "done"
+    assert body["status"] == "completed"
     assert body["report"] is None
 
 

@@ -10,7 +10,7 @@
   单切片 ingest + finalize，复用同一套增量机制。
 
 三入口（雅思 A / 方式 B / 情景）共用，仅方式 B 不依赖 Live（PRD §3）。
-状态机：uploaded → processing → done | failed。
+状态机（SCHEMA §5.1）：live|recording|uploaded(过渡) → processing → completed | failed。
 """
 
 import logging
@@ -99,9 +99,10 @@ def finalize_session(session_id: str, *, sessions: int = 1) -> None:
         logger.exception("评测流水线 finalize 失败: session=%s", session_id)
         raise
     else:
-        # 报告落库成功才置 done。置 done 单独放 else：若它本身 DB 出错，异常上抛、
-        # 状态停在 processing，绝不把已落库的完整报告误标 failed 被 GET /reports 屏蔽。
-        crud.update_session_status(session_id, "done")
+        # 报告落库成功才置 completed（SCHEMA §5.1 枚举）。单独放 else：若它本身
+        # DB 出错，异常上抛、状态停在 processing，绝不把已落库的完整报告误标
+        # failed 被 GET /reports 屏蔽。
+        crud.update_session_status(session_id, "completed")
 
 
 def process_session(session_id: str) -> None:
@@ -123,7 +124,7 @@ def process_session(session_id: str) -> None:
         crud.update_session_status(session_id, "failed")
         logger.exception("评测流水线 ingest 失败: session=%s", session_id)
         raise
-    # finalize 自带完整的 try/except/else 状态机（failed / done），无需在此包裹。
+    # finalize 自带完整的 try/except/else 状态机（failed / completed），无需在此包裹。
     finalize_session(session_id)
 
 

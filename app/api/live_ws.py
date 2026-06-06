@@ -94,7 +94,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 scenario_case=scenario_case,
                 audio_path=None,
                 duration_s=None,
-                status="recording",
+                status="live",   # SCHEMA §5.1：Live 会话中（recording 留给方式 B 录音）
             )
             await websocket.send_json(
                 {"type": "session_started", "session_id": session_id}
@@ -168,8 +168,8 @@ def _schedule_orphan_cleanup(session_id: str) -> None:
 def _cleanup_orphan(session_id: str) -> None:
     try:
         session = crud.get_session(session_id)
-        # 再核一遍状态：只删仍停在 recording 的行，绝不误删已进评测的会话
-        if session is not None and session["status"] == "recording":
+        # 再核一遍状态：只删仍停在 live 的行，绝不误删已进评测的会话
+        if session is not None and session["status"] == "live":
             crud.delete_session(session_id)
     except Exception:
         logger.exception("孤儿会话清理失败: session=%s", session_id)

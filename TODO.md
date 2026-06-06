@@ -62,7 +62,7 @@
 - [~] Library 页 + `GET /sessions` 列表接口（seed 标注"演示数据"）——后端接口 2026-06-07 PR #22 完成（倒序 + 摘要分 LEFT JOIN + status/is_seed；契约加 status 字段）；余前端页 + 验证
 - [~] Review 进步面板（原 Progress 改名）：band 轨迹（仅雅思 A）+ 雷达 + 流利度趋势 + 目标差距；`GET /progress` + `GET/PUT /settings`——后端接口随 PR #22 完成（band_series 仅方式 A / fluency_series 含 error_rate / gap 正负语义 / 0.5 倍数校验）；余前端面板 + 验证
 - [x] seed 脚本（6–8 条历史会话，`is_seed` 标注；流利度爬升 + 雅思 A band 5.5→6.5）——2026-06-07 PR #23：`python -m app.seed` 7 条（A×3 band 5.5→6.0→6.5 真聚合 + B×2 + 情景×2，流利度四指标单调向好）；幂等重插 + --purge 只删 seed 行；report_json 经 Report 模型与真流水线同 schema
-- [ ] Live 会话 `duration_s` 落库（live 建行后无人回填，Library 时长列恒 '—'；done/007 反馈①；方向：finalize 汇总用户切片时长）
+- [x] Live 会话 `duration_s` 落库（done/007 反馈①）——2026-06-07 PR #24：end_session 单次回填墙钟时长（单调钟；弃局不回填留 NULL）；存量旧 live 行仍 '—' 属预期
 
 ### P7 eval + 收尾（~2h）
 - [ ] eval harness 跑方差（同输入 judge 5 次，四维 band 方差 ≤ 0.5）
@@ -98,5 +98,6 @@
 2026-06-07 — **P5 后端两项完成并勾选**（PR #21）：`app/scenario_cases.py` case 注册表（ordering/meeting persona + judge 侧重段；/ws/live 白名单由注册表推导、finalize 回填 case_prompt、未知 case 降级占位不 failed；persona 内置方括号指令规则为拓展项 ask_help 预留接线）。pytest 183 绿（+8）+ 三轮真冒烟（judge 无 band 命中点餐侧重·planted "want eat" 捕获 / ordering·meeting persona 真 Live 守角色 + 自然收尾）+ review PASS。ask_help 破壁按用户决策移入拓展区（不在 24h 主线）；handoff/inbox/006 情景前端接入契约已投递。下次：P6 后端件 PR-A（GET /sessions + GET /progress + settings API）
 2026-06-07 — **P6 后端件 PR-A 完成**（PR #22，P6 两项标 [~] 余前端）：GET /sessions（Library 倒序 + overall_band/wpm 摘要分 LEFT JOIN + status/is_seed，契约加 status）+ GET /progress（band_series 仅方式 A 三重过滤 / fluency_series 全模式含 error_rate / latest_bands / gap=target−latest 正负语义）+ GET/PUT /settings（0–9 且 0.5 倍数，null 清除）；SCHEMA §6.2/§6.4 字段名锁定。pytest 201 绿（+18）+ 真冒烟（真 oral.db：51 行列表 / 11 band 点 + 18 流利度点 / gap 计算正确 / 422 生效）+ review PASS（2🟡 测试缺口已补）。handoff/inbox/007 F5 契约件已投递（注明 seed 脚本未做、真库暂无 is_seed 行）/ 无阻塞 / 下次：P6 seed 脚本或修方式 A done 不发（done/005 🔴 模型抢戏）
 2026-06-07 — **P6 seed 脚本完成并勾选**（PR #23）：`python -m app.seed` 7 条历史会话（A×3 band 5.5→6.0→6.5 真聚合 + B×2 + 情景×2；wpm/静默/填充/错误率/ttr 单调向好）；幂等重插 + --purge 只删 seed 行（真实行零波及测试钉死）；report_json 经 Report 模型同 schema、evidence 纯英文 ASR 转写体 + CJK 护栏。pytest 212 绿（+11）+ 真冒烟（seed→曲线爬升→purge 还原）+ review 首轮 NEEDS-FIX（🔴 evidence 引证违规×5）→修→复审 PASS。F5 前端随 007 回执 PASS 收官（Library+Review 两页真数据联调过，error_rate 加线已采纳）；007 反馈记两条新 TODO（live duration_s 漏落库 / 瞬态残留清理）；真库已播种 + handoff/inbox/008 验证件已投。下次：修 live duration_s 或方式 A done 不发（done/005 🔴）
+2026-06-07 — **live duration_s 回填完成并勾选**（PR #24，done/007 反馈①闭环）：session_started 后记单调钟起点，end_session 回调内墙钟差值回填 + 翻 processing 同瞬间；弃局不回填留 NULL；方式 B 互踩不可能（status 门 409）。pytest 213 绿（+1 用例 + 弃局 NULL 不变式断言）+ 真冒烟（真 Live 建链 sleep 2.2s→库里 2.20s 精确吻合）+ review PASS。存量旧 live 行仍 '—' 属预期（不回写历史）。下次：修方式 A done 不发（done/005 🔴 模型抢戏）或 P8 残留清理
 
 

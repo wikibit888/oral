@@ -49,6 +49,11 @@ class UserAudioTee:
         self._ingest_tasks: list[asyncio.Task] = []
         self._ingest_lock = asyncio.Lock()      # 切片串行 ingest：whisper 单例不并发喂
 
+    @property
+    def clip_count(self) -> int:
+        """已切出的切片数。为 0 说明从未发起任何 ingest（孤儿会话判定用，无 DB 竞态）。"""
+        return self._clip_seq
+
     # ---- bridge 钩子（事件循环内同步调用） ----
     # finish() 后全部失效：end_session 之后、下行泵被取消之前，Live 已缓冲的
     # turn_complete / 音频仍可能再走一拍钩子——若不挡住，会翻转地板再切出

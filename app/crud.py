@@ -38,11 +38,17 @@ def get_session(session_id: str) -> sqlite3.Row | None:
 
 
 def update_session_status(session_id: str, status: str) -> None:
-    """推进会话状态机：uploaded → processing → done | failed。"""
+    """推进会话状态机：(recording →) uploaded → processing → done | failed。"""
     with get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET status = ? WHERE id = ?", (status, session_id)
         )
+
+
+def delete_session(session_id: str) -> None:
+    """物理删除一条会话（FK CASCADE 连带 turns / reports；孤儿清理、Give Up 用）。"""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
 def create_turn(

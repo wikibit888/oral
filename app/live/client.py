@@ -10,11 +10,15 @@ judge 用的 httpx `http_options.client_args` 对 WS 不生效。因此这里在
 """
 
 import copy
+import logging
 import os
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from google import genai
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 按 Live API 规范固定：上行 16k PCM16，下行 24k PCM16
 SEND_SAMPLE_RATE = 16000
@@ -61,11 +65,29 @@ def _client() -> genai.Client:
     return _live_client
 
 
-def connect_live():
-    """返回一条 Live 连接的 async context manager（`async with connect_live() as session:`）。"""
+def _connect_once():
+    """返回 SDK 的 Live 连接 context manager（单次尝试，供 connect_live 重试包装）。"""
     _apply_ws_proxy_env()
     # 传防御深拷贝：浅拷贝下嵌套的 *_transcription 子 dict 仍是共享对象，
     # SDK 若原地改动会污染后续所有连接（review W1）
     return _client().aio.live.connect(
         model=settings.live_model, config=copy.deepcopy(LIVE_CONFIG)
     )
+
+
+@asynccontextmanager
+async def connect_live():
+    """一条 Live 连接（`async with connect_live() as session:`），建链瞬态失败重试一次。
+
+    联调实测偶发 TLS start_tls 被重置（ConnectionResetError ⊂ OSError），重连即通。
+    只重试**建链**（enter_async_context 阶段）：会话中途的异常经 yield 原样上抛，
+    绝不偷偷换一条新会话续命——若把 yield 包进 try，body 里的 OSError 也会被
+    误捕获触发重连。
+    """
+    async with AsyncExitStack() as stack:
+        try:
+            session = await stack.enter_async_context(_connect_once())
+        except OSError as e:
+            logger.warning("Live 建链瞬态网络错，重试一次：%r", e)
+            session = await stack.enter_async_context(_connect_once())
+        yield session

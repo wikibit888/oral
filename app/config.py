@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
 
+    # 热重载（默认开）。联调 live 会话时置 APP_RELOAD=0：reload 重启进程会
+    # 掐断所有进行中的 WS 会话（联调发现②）
+    app_reload: bool = True
+
     # 允许跨域的前端来源（React dev server：Vite 5173 / CRA 3000）
     cors_origins: list[str] = [
         "http://localhost:5173",

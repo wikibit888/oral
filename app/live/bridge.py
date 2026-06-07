@@ -2,7 +2,8 @@
 
 帧契约（FRONTEND §5 事件契约的桥接子集；建链 session_started 由入口层发）：
 - 浏览器 → 后端：binary = 16k PCM16 音频帧；text = JSON 控制消息
-  {"type": "end_session"} / {"type": "turn_end"}（仅 PTT 模式有效）。
+  {"type": "end_session"} / {"type": "turn_end"}（仅 PTT 模式有效）/
+  {"type": "nudge", "stage": 1|2|3}（仅情景：沉默分级探询，前端计时器发）。
 - 后端 → 浏览器：binary = 24k PCM16 音频帧；text = JSON 事件
   transcript_delta {role: user|examiner, text} / interrupted（barge-in，
   前端立即清空 24k 播放队列）/ turn_complete（考官回合结束）/
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 async def bridge(
     websocket, session, *, turn_mode="natural", tee=None, on_end_session=None,
-    director=None, tool_handler=None,
+    director=None, tool_handler=None, nudger=None,
 ) -> None:
     """并发跑上行 / 下行两个泵，任一结束就取消另一个；泵内异常向上抛。
 
@@ -50,12 +51,17 @@ async def bridge(
     tool_handler：function calling 应答台（app/live/help.py，鸭子类型，仅情景）。
     下行泵收到 tool_call 即 await `on_tool_call(name, args)` 并把返回体经
     send_tool_response 回给模型——应答必须纯本地瞬时（模型在等响应期间是哑的）。
+    nudger：沉默分级探询执行端（app/live/help.py ScenarioNudger，鸭子类型，
+    仅情景）。上行泵收到 nudge 控制消息即 await `on_nudge(session, stage)`
+    注入分级舞台指令；无 nudger（方式 A）记日志忽略——考官中立不探询。
     """
     # 延迟徽章（latency_ms 事件）：两泵共享一个测量器——上行采用户停说点，
     # 下行在考官首帧出数（FRONTEND §5）
     meter = LatencyMeter(turn_mode)
     up = asyncio.create_task(
-        _pump_upstream(websocket, session, turn_mode, tee, on_end_session, meter, director)
+        _pump_upstream(
+            websocket, session, turn_mode, tee, on_end_session, meter, director, nudger
+        )
     )
     down = asyncio.create_task(
         _pump_downstream(websocket, session, tee, meter, director, tool_handler)
@@ -75,7 +81,7 @@ async def bridge(
 
 async def _pump_upstream(
     websocket, session, turn_mode="natural", tee=None, on_end_session=None, meter=None,
-    director=None,
+    director=None, nudger=None,
 ) -> None:
     """浏览器 → Live：二进制音频帧转发（tee / meter 同步分叉）；文本按控制消息处理。
 
@@ -83,6 +89,7 @@ async def _pump_upstream(
     内建 VAD 已关，没有这对信号 Live 不会响应。
     director 备题期（input_paused）丢弃音频帧：不进 Live、不进 tee、不进 meter——
     备题嘀咕不是说话样本（IELTS.md §2 P2 准备阶段 Live 输入暂停）。
+    nudge 控制消息（仅情景）→ nudger 注入分级探询舞台指令。
     收到 end_session 先回调 on_end_session 再返回；客户端断开直接返回。
     """
     ptt = turn_mode == "ptt"
@@ -106,17 +113,25 @@ async def _pump_upstream(
             )
         elif (text := message.get("text")) is not None:
             control = _parse_control(text)
-            if control == "end_session":
+            kind = control.get("type") if control else None
+            if kind == "end_session":
                 if on_end_session is not None:
                     on_end_session()
                 return
-            if control == "ready":
+            if kind == "ready":
                 if director is not None:
                     await director.on_ready(websocket, session)   # 提前结束备题
                 else:
                     logger.debug("ready 被忽略：无 director（非方式 A）")
                 continue
-            if control == "turn_end":
+            if kind == "nudge":
+                if nudger is not None:
+                    # 沉默分级探询：stage 由前端计时器分级（防抖在 nudger 内）
+                    await nudger.on_nudge(session, control.get("stage"))
+                else:
+                    logger.debug("nudge 被忽略：无 nudger（非情景模式）")
+                continue
+            if kind == "turn_end":
                 if ptt and activity_open:
                     if meter is not None:
                         meter.on_turn_end()  # ptt：松开即停说时刻
@@ -131,16 +146,18 @@ async def _pump_upstream(
                     )
 
 
-def _parse_control(text: str) -> str | None:
-    """解析控制消息，返回类型字符串；未知/非法消息记日志忽略（None），不断流。"""
+def _parse_control(text: str) -> dict | None:
+    """解析控制消息，返回整条消息 dict（含 nudge 的 stage 等参数字段）；
+    未知/非法/非对象消息记日志忽略（None），不断流。"""
     try:
         control = json.loads(text)
     except ValueError:
         logger.warning("live WS 收到非 JSON 文本消息，忽略：%.100s", text)
         return None
-    kind = control.get("type")
-    if kind in ("end_session", "turn_end", "ready"):
-        return kind
+    # 非对象 JSON（如 "5"、"[]"）没有 .get：一并按非法忽略，不炸泵
+    kind = control.get("type") if isinstance(control, dict) else None
+    if kind in ("end_session", "turn_end", "ready", "nudge"):
+        return control
     logger.warning("live WS 收到未知控制消息，忽略：%.100s", text)
     return None
 

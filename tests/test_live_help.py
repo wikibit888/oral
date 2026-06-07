@@ -1,7 +1,8 @@
-"""LanguageHelpDesk 应答台单测：模板控形 / 轮换 / 控频 / teaching 事件 / 容错。
+"""情景教练运行时单测：LanguageHelpDesk（模板控形 / 轮换 / 控频 / teaching 事件 /
+容错）+ ScenarioNudger（分级注入 / 防抖 / stage 钳制）。
 
-ws 与时钟都注入假体，零网络；async 用 asyncio.run 驱动（同 test_director 模式），
-控频用假钟拨表确定性复现。
+ws / session / 时钟都注入假体，零网络；async 用 asyncio.run 驱动
+（同 test_director 模式），控频与防抖用假钟拨表确定性复现。
 """
 
 import asyncio
@@ -11,9 +12,16 @@ import pytest
 from app.live.help import (
     HELP_OVERUSE_THRESHOLD,
     HELP_STREAK_WINDOW_S,
+    NUDGE_DEBOUNCE_S,
     LanguageHelpDesk,
+    ScenarioNudger,
 )
-from app.scenario_cases import CASES, HELP_DIRECTIVES, HELP_OVERUSE_DIRECTIVE
+from app.scenario_cases import (
+    CASES,
+    HELP_DIRECTIVES,
+    HELP_OVERUSE_DIRECTIVE,
+    NUDGE_DIRECTIVES,
+)
 
 _SCENE = CASES["ordering"].scene_label
 
@@ -153,3 +161,70 @@ def test_broken_ws_does_not_break_tool_response():
         _desk(FakeWs(broken=True)).on_tool_call("language_help", _args())
     )
     assert "spaghetti" in result["directive"]
+
+
+# —— ScenarioNudger（D1 沉默分级探询执行端）—— #
+
+
+class FakeSession:
+    """记录舞台指令注入（send_stage_direction → send_client_content）。"""
+
+    def __init__(self):
+        self.directions: list = []
+
+    async def send_client_content(self, *, turns, turn_complete=True):
+        self.directions.append(turns.parts[0].text)
+
+
+def _nudger(clock=None, case="ordering"):
+    return ScenarioNudger(case, clock=clock or FakeClock())
+
+
+def test_nudge_injects_staged_directive_with_scene():
+    async def run():
+        clock = FakeClock()
+        nudger = _nudger(clock)
+        sess = FakeSession()
+        for i, stage in enumerate((1, 2, 3)):
+            clock.advance(NUDGE_DEBOUNCE_S + 1)
+            await nudger.on_nudge(sess, stage)
+            expected = NUDGE_DIRECTIVES[stage].replace("{scene}", _SCENE)
+            assert sess.directions[i] == expected, stage
+        # 分级语义：2 给句头、3 给选项并确认是否继续；全部无残留槽
+        assert "starter" in sess.directions[1]
+        assert "continue" in sess.directions[2]
+        assert all("{" not in d for d in sess.directions)
+
+    asyncio.run(run())
+
+
+def test_nudge_debounced_within_window():
+    async def run():
+        clock = FakeClock()
+        nudger = _nudger(clock)
+        sess = FakeSession()
+        await nudger.on_nudge(sess, 1)
+        clock.advance(NUDGE_DEBOUNCE_S - 1)
+        await nudger.on_nudge(sess, 2)       # 窗口内：忽略
+        assert len(sess.directions) == 1
+        clock.advance(2)
+        await nudger.on_nudge(sess, 2)       # 出窗：放行
+        assert len(sess.directions) == 2
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_stage"),
+    [(0, 1), (-3, 1), (99, 3), ("2", 2), ("abc", 1), (None, 1)],
+)
+def test_nudge_stage_clamped_and_coerced(raw, expected_stage):
+    # stage 是前端来的不可信输入：任何取值都不崩、钳到模板键域
+    async def run():
+        sess = FakeSession()
+        await _nudger().on_nudge(sess, raw)
+        assert sess.directions == [
+            NUDGE_DIRECTIVES[expected_stage].replace("{scene}", _SCENE)
+        ]
+
+    asyncio.run(run())

@@ -33,6 +33,22 @@ def test_personas_share_conversation_contract():
         assert "Never switch out of English" in p, name
 
 
+def test_openers_contract():
+    """开场模板契约：每 case ≥2 条（随机抽有意义）、方括号舞台指令形态、
+    收尾于一个引导性问题（AI 说完用户知道接什么）。"""
+    for name, case in CASES.items():
+        assert len(case.openers) >= 2, name
+        for opener in case.openers:
+            o = " ".join(opener.split())
+            assert o.startswith("[Stage direction:"), name
+            assert o.endswith("]"), name
+            # 「现在就开口」意图：不 pin 具体动词（Open/Start/Begin 均可，
+            # 加 case 只写文本不该被措辞卡住），只查即时性信号词
+            assert " now" in o, name
+            assert "only that one question" in o, name        # 一个引导性问题收尾
+    assert set(CASES["ordering"].openers).isdisjoint(CASES["meeting"].openers)
+
+
 def test_cases_are_distinct_roles():
     assert "restaurant" in CASES["ordering"].persona
     assert "meeting" in CASES["meeting"].persona

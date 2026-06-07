@@ -1,14 +1,19 @@
-"""情景对话 case 注册表（SCENARIO.md §2）：每个 case = persona + judge 侧重，两段 prompt。
+"""情景对话 case 注册表（SCENARIO.md §2）：每个 case = persona + judge 侧重 + 开场模板。
 
-设计约束「加 case = 写两段新 prompt，不碰代码」的落点：CASES 加一个条目即全链生效——
-/ws/live 的 case 白名单由本表推导（live_ws），建链注入 persona 做 system_instruction，
-课后 judge 注入 judge_focus 做 case 侧重段（pipeline → build_judge_prompt）。
+设计约束「加 case = 只写文本，不碰代码」的落点：CASES 加一个条目即全链生效——
+/ws/live 的 case 白名单由本表推导（live_ws），建链注入 persona 做 system_instruction
+并随机抽一条 opener 让 AI 先开口，课后 judge 注入 judge_focus 做 case 侧重段
+（pipeline → build_judge_prompt）。
 
 persona 写作要点（SCENARIO.md §1/§4）：
 - 守角色 + 话少：用户练口语，对方一次只问/答一件事；
 - 自然收尾指引：用户手动点 End，但 persona 在用户告别/收尾时要能自然结束对话；
-- 方括号导演提示规则**现在就写进 persona**：ask_help 破壁（下个 PR）靠它生效，
-  与方式 A 考官的 stage direction 约定一致（director.py）。
+- 方括号导演提示规则**现在就写进 persona**：开场指令与 ask_help 破壁（拓展）靠它
+  生效，与方式 A 考官的 stage direction 约定一致（director.py）。
+openers 写作要点（AI 先开口，不让用户面对冷场）：
+- 每条都是方括号舞台指令，三段式——角色定位 → 场景铺设 → **一个引导性问题收尾**，
+  AI 说完用户立刻知道该接什么话；
+- 每 case 至少 2 条，建链随机抽（多次练习不重样，同 cue card 抽取模式）。
 judge_focus 是 case 侧重段（中文，风格对齐 judge/prompt.py 的 MODULE_FOCUS）；
 通用诊断与禁 band 规则在 build_judge_prompt 内共享注入，这里只写差异。
 """
@@ -18,8 +23,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ScenarioCase:
-    persona: str       # Live system_instruction（英文，角色扮演）
-    judge_focus: str   # judge prompt 的 case 侧重段（中文，诊断导向）
+    persona: str                 # Live system_instruction（英文，角色扮演）
+    judge_focus: str             # judge prompt 的 case 侧重段（中文，诊断导向）
+    openers: tuple[str, ...]     # 开场舞台指令模板（建链随机抽一条，AI 先开口）
 
 
 _ORDERING_PERSONA = """\
@@ -65,6 +71,38 @@ times:
   refer to them.\
 """
 
+_ORDERING_OPENERS = (
+    "[Stage direction: A customer has just sat down at one of your tables. Open "
+    "the conversation now: greet them as their server, introduce yourself briefly, "
+    "and ask if you can start them off with something to drink. Keep it to two "
+    "short sentences and ask only that one question.]",
+    "[Stage direction: A customer has just walked in and taken a seat. Open the "
+    "conversation now: welcome them, mention that today's special is the grilled "
+    "salmon with lemon butter, then ask whether they are ready to order or need "
+    "a minute with the menu. Keep it short and ask only that one question.]",
+    "[Stage direction: A customer has just been seated during a busy dinner hour. "
+    "Open the conversation now: greet them warmly, let them know the kitchen is a "
+    "little slow tonight, and ask what you can get started for them. Keep it "
+    "short and ask only that one question.]",
+)
+
+_MEETING_OPENERS = (
+    "[Stage direction: The weekly project status meeting has just started and the "
+    "user is first to report. Open the meeting now: greet them briefly, say you "
+    "would like to run through progress updates, then ask them to start with a "
+    "quick update on where things stand. Keep it short and ask only that one "
+    "question.]",
+    "[Stage direction: The meeting has just started and the release deadline is "
+    "next Friday. Open the meeting now: greet the user, remind them the deadline "
+    "is getting close, and ask whether their part of the work is on track. Keep "
+    "it short and ask only that one question.]",
+    "[Stage direction: The meeting has just started and you heard there was a "
+    "blocker in the user's area last week. Open the meeting now: greet the user, "
+    "mention you heard about the blocker, and ask them to walk you through what "
+    "happened and where it stands now. Keep it short and ask only that one "
+    "question.]",
+)
+
 _ORDERING_JUDGE_FOCUS = (
     "点餐场景侧重：点单流程是否说清——想要什么（菜品 / 数量 / 做法偏好 / 忌口）"
     "能否一次表达清楚；面对服务员追问（饮料 / 配菜 / 熟度）能否听懂并直接回应；"
@@ -80,8 +118,16 @@ _MEETING_JUDGE_FOCUS = (
 )
 
 CASES: dict[str, ScenarioCase] = {
-    "ordering": ScenarioCase(persona=_ORDERING_PERSONA, judge_focus=_ORDERING_JUDGE_FOCUS),
-    "meeting": ScenarioCase(persona=_MEETING_PERSONA, judge_focus=_MEETING_JUDGE_FOCUS),
+    "ordering": ScenarioCase(
+        persona=_ORDERING_PERSONA,
+        judge_focus=_ORDERING_JUDGE_FOCUS,
+        openers=_ORDERING_OPENERS,
+    ),
+    "meeting": ScenarioCase(
+        persona=_MEETING_PERSONA,
+        judge_focus=_MEETING_JUDGE_FOCUS,
+        openers=_MEETING_OPENERS,
+    ),
 }
 
 

@@ -179,9 +179,32 @@ def test_session_started_creates_scenario_row(client, monkeypatch, case):
     assert row["mode"] == "scenario"
     assert row["sub_mode"] is None
     assert row["scenario_case"] == case
-    # 情景建链注入该 case 的角色 persona；无导演状态机 → 零导演提示
+    # 情景建链注入该 case 的角色 persona；无导演状态机，但建链即注入
+    # 一条开场舞台指令（AI 先开口，不让用户面对冷场）
     assert session.system_instruction == SCENARIO_CASES[case].persona
-    assert session.directions == []
+    assert len(session.directions) == 1
+    opener_text = session.directions[0].parts[0].text
+    assert opener_text in SCENARIO_CASES[case].openers
+
+
+def test_scenario_opener_randomly_picked_from_registry(client, monkeypatch):
+    """开场模板随机抽：钉死 random.choice 的输入是该 case 的 openers 全集。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+    picked = {}
+
+    def fake_choice(seq):
+        picked["seq"] = seq
+        return seq[-1]                       # 抽最后一条，验证非首条也能注入
+
+    monkeypatch.setattr("app.api.live_ws.random.choice", fake_choice)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=meeting") as ws:
+        ws.receive_json()                    # session_started
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert picked["seq"] == SCENARIO_CASES["meeting"].openers
+    assert session.directions[0].parts[0].text == SCENARIO_CASES["meeting"].openers[-1]
 
 
 def test_create_session_failure_reports_error(client, monkeypatch):

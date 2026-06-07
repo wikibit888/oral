@@ -10,6 +10,8 @@
 - overall_band 由系统按四维确定性聚合（judge 不自算；信号≠成绩）；
 - 数字 band 只在雅思方式 A（sub_mode=exam）：方式 B（module_pX）四维仅作内部
   诊断依据、最终置空（descriptor 对齐诊断，IELTS.md §3）；情景强制无 band；
+- 情景报告结构（用户决策 2026-06-07）：rewrites 强制清空（会话内已即时纠正）、
+  summary 仅情景保留（雅思置 None）——系统强制，不靠 LLM 自觉；
 - 雅思 judge 拒评（dimensions=None）标记 unscorable 而非抛错，保留诊断层、不哑失败。
 """
 
@@ -218,6 +220,16 @@ def run_judge(
         # band 只在雅思有意义：情景强制无 band，且 dimensions=None 是正常、非 unscorable。
         report.dimensions = None
         report.overall_band = None
+        # 情景不出改写示范（会话内 grammar_note 已即时纠正）——LLM 误填也强制清空。
+        report.diagnostics.rewrites = []
+        if not report.diagnostics.summary:
+            # summary 是情景报告的收尾段：模型漏填只降级（前端按 null 隐藏总结段），
+            # 不抛错不补写，记 warning 保留可观测性（review W1）。
+            logger.warning("run_judge: 情景 judge 未产出 summary，报告将无总结段。")
+
+    if mode == "ielts":
+        # summary 仅情景对话产出（雅思已有 top_priorities 收口）——LLM 误填也剥除。
+        report.diagnostics.summary = None
 
     return report
 

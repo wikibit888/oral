@@ -111,6 +111,19 @@ def test_dimension_evidence_is_verbatim_english():
                 assert not _has_cjk(quote), f"{spec['id']}: evidence 混入中文: {quote!r}"
 
 
+def test_scenario_seeds_summary_no_rewrites():
+    """情景报告结构（用户决策 2026-06-07）：情景 seed 无改写示范、有中文末尾总结；
+    雅思 seed 保留改写示范、不带 summary（schema 默认 None）。"""
+    for spec in SEED_SPECS:
+        diag = spec["diagnostics_judge"]
+        if spec["mode"] == "scenario":
+            assert diag["rewrites"] == [], f"{spec['id']}: 情景不出改写示范"
+            assert diag["summary"] and _has_cjk(diag["summary"]), f"{spec['id']}: 情景总结缺失"
+        else:
+            assert diag["rewrites"], f"{spec['id']}: 雅思 seed 应保留改写示范"
+            assert "summary" not in diag, f"{spec['id']}: summary 仅情景"
+
+
 def test_seed_default_clock_path(client):
     # 不传 now 走 datetime.now(timezone.utc) 默认路径
     assert len(seed()) == 7
@@ -130,11 +143,13 @@ def test_seed_reports_render_via_api(client):
     assert a["report"]["overall_band"] == 6.5
     assert a["report"]["dimensions"]["pronunciation"]["band"] == 7.0
     assert a["report"]["unscorable"] is False
-    # 情景：无 band，诊断层完整
+    # 情景：无 band，诊断层完整；无改写示范、有末尾总结（用户决策 2026-06-07）
     s = client.get("/reports/seed-02").json()
     assert s["report"]["overall_band"] is None
     assert s["report"]["dimensions"] is None
     assert s["report"]["diagnostics"]["top_priorities"]
+    assert s["report"]["diagnostics"]["rewrites"] == []
+    assert s["report"]["diagnostics"]["summary"]
     # 方式 B：同样无 band
     b = client.get("/reports/seed-06").json()
     assert b["report"]["overall_band"] is None

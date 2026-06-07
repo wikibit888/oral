@@ -201,6 +201,39 @@ def test_scenario_forces_no_band_and_no_audio(monkeypatch):
     assert len(fake.models.last["contents"]) == 1        # 情景不喂音频
 
 
+# —— 情景报告结构（用户决策 2026-06-07）：rewrites 强制清空 + summary 仅情景 —— #
+def test_scenario_forces_empty_rewrites_keeps_summary(monkeypatch):
+    # 即便 LLM 误填 rewrites，情景也强制清空；summary 保留进报告
+    judged = _judged(None)
+    judged.diagnostics.rewrites = [Rewrite(original="o", rewrite="r", reason="x")]
+    judged.diagnostics.summary = "点单完成度好；祈使句偏硬，先套 Could I... 句式。"
+    _patch(monkeypatch, judged)
+    rep = judge_run.run_judge(mode="scenario", transcript=TR, signals=SIG, scenario_case="ordering")
+    assert rep.diagnostics.rewrites == []
+    assert rep.diagnostics.summary == "点单完成度好；祈使句偏硬，先套 Could I... 句式。"
+
+
+def test_scenario_missing_summary_degrades_with_warning(monkeypatch, caplog):
+    # 模型漏填 summary：静默降级为 None（前端按 null 隐藏总结段），记 warning 可观测（review W1）
+    _patch(monkeypatch, _judged(None))    # _diag() 不带 summary（schema 默认 None）
+    with caplog.at_level("WARNING"):
+        rep = judge_run.run_judge(mode="scenario", transcript=TR, signals=SIG, scenario_case="ordering")
+    assert rep.diagnostics.summary is None
+    assert any("未产出 summary" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("sub_mode", ["exam", "module_p2"])
+def test_ielts_strips_summary_keeps_rewrites(monkeypatch, sub_mode):
+    # 雅思反向：summary 剥除（A / B 都不出），rewrites 保留
+    judged = _judged(_dims())
+    judged.diagnostics.rewrites = [Rewrite(original="o", rewrite="r", reason="x")]
+    judged.diagnostics.summary = "不该出现在雅思报告"
+    _patch(monkeypatch, judged)
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, sub_mode=sub_mode)
+    assert rep.diagnostics.summary is None
+    assert len(rep.diagnostics.rewrites) == 1
+
+
 # —— unscorable 边界 —— #
 def test_ielts_missing_dimensions_marks_unscorable(monkeypatch):
     # 雅思 judge 拒评（dimensions=None）不抛错：标记 unscorable，保留诊断层

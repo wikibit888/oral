@@ -83,6 +83,9 @@ class JudgeDiagnostics(BaseModel):
     self_corrections: list[SelfCorrectionItem]
     top_priorities: list[TopPriority]
     rewrites: list[Rewrite]
+    # 情景对话报告末尾总结（一段简短中文：肯定亮点 → 点出主要问题 → 给提升方向）。
+    # 仅情景产出；雅思由 run_judge 确定性置 None（已有 top_priorities，不重复一份总结）。
+    summary: str | None = None
 
 
 class Diagnostics(JudgeDiagnostics):

@@ -26,7 +26,11 @@ from app import crud
 from app.api.questions import _load_bank
 from app.live.bridge import bridge
 from app.live.client import connect_live
-from app.live.director import EXAMINER_SYSTEM_INSTRUCTION, IeltsDirector
+from app.live.director import (
+    EXAMINER_SYSTEM_INSTRUCTION,
+    IeltsDirector,
+    send_stage_direction,
+)
 from app.live.tee import UserAudioTee
 from app.pipeline import finalize_session
 from app.scenario_cases import CASES as SCENARIO_CASES
@@ -142,6 +146,11 @@ async def live_ws(websocket: WebSocket) -> None:
             if sub_mode == "exam":
                 director = IeltsDirector(_pick_cue_card())
                 await director.start(websocket, live_session)
+            elif mode == "scenario":
+                # 情景也由 AI 先开口（done/006 实录用户面对冷场先说话）：
+                # 随机抽一条开场舞台指令，角色入戏开场并以一个引导性问题
+                # 把用户带进场景。对评测零污染——文本回合不进 tee/转写样本。
+                await send_stage_direction(live_session, _pick_opener(scenario_case))
 
             await bridge(
                 websocket,
@@ -177,6 +186,11 @@ async def live_ws(websocket: WebSocket) -> None:
 def _pick_cue_card() -> dict:
     """从题库 p2 随机抽一张 cue card（静态精选库 8 张，IELTS.md §2）。"""
     return random.choice(_load_bank()["p2"])
+
+
+def _pick_opener(case: str) -> str:
+    """从 case 注册表随机抽一条开场舞台指令（多次练习不重样，同 cue card 模式）。"""
+    return random.choice(SCENARIO_CASES[case].openers)
 
 
 def _schedule_finalize(tee: UserAudioTee, session_id: str) -> None:

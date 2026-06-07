@@ -40,6 +40,19 @@ PREP_SECONDS = 60          # P2 备题时长（官方 1 分钟）
 P1_EXAMINER_TURNS = 4      # P1 问答轮数（demo 缩短；真考 4–5 问）
 P3_EXAMINER_TURNS = 4      # P3 进入后的讨论轮数（首问在转场轮已问出）
 
+
+async def send_stage_direction(session, prompt: str) -> None:
+    """注入方括号舞台指令：作为文本回合发给 Live，演员照做但不读出。
+
+    方式 A 考官与情景角色共用的约定（persona 内置同一条方括号规则）——
+    情景开场指令（live_ws._pick_opener）也走这里。
+    """
+    await session.send_client_content(
+        turns=types.Content(role="user", parts=[types.Part(text=prompt)]),
+        turn_complete=True,
+    )
+
+
 # —— 导演提示（方括号 = 考官不读出；跨段动作全部预埋）—— #
 _OPENING_PROMPT = (
     "[Stage direction: You are starting Part 1 of the IELTS Speaking mock exam. "
@@ -204,8 +217,5 @@ class IeltsDirector:
 
     @staticmethod
     async def _direct(session, prompt: str) -> None:
-        """注入方括号导演提示：作为文本回合发给 Live，考官按指示行动但不读出。"""
-        await session.send_client_content(
-            turns=types.Content(role="user", parts=[types.Part(text=prompt)]),
-            turn_complete=True,
-        )
+        """注入导演提示（薄别名：实现见模块级 send_stage_direction）。"""
+        await send_stage_direction(session, prompt)

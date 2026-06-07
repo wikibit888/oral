@@ -24,6 +24,11 @@ Live，VAD 误判插话把开场轮 barge-in 掐掉。两层对策：① start()
 麦克风（积压帧 + 开场期杂音全丢），开场轮真说完（首个有声 turn_complete）才放行；
 ② 开场看门狗——OPENING_NUDGE_S 秒无任何考官音频判开场指令被吞，重发（至多 3 次）。
 
+长谈独白上限（IELTS_CASE §2 上限层）：p2_talk 入场起 MAX_MONOLOGUE_S 计时器——
+邀请轮（首个有声轮）锚定保持，考官再次发声（软探询/追问）即撤；到点注入切断指令
+让考官礼貌 "Thank you" 收口 + 问追问，不转场、不硬切音频流。与 MAX_P2_TALK_S
+整段安全网并存：前者切独白，后者兜整段死锁。
+
 收官（实测反馈④）：进 done 即重新 input_paused（参考实现的 "scoring mode: user
 speech ignored"——考后杂音不进 Live 不进切片）；自动结束由前端完成：收到
 part_change done 且收尾语音**播完**后自动走 end_session 流程（只有前端知道播放
@@ -60,10 +65,24 @@ You are a professional IELTS Speaking examiner conducting a real mock exam with 
 
 General rules (always):
 - Stay neutral: never correct the candidate's mistakes, never praise or encourage beyond a
-  brief acknowledgement ("Thank you.", "Alright.").
+  brief acknowledgement ("Thank you.", "Alright."). Never teach vocabulary, never give your
+  own opinions, and never help the candidate build their answer — all feedback, corrections
+  and scores come only after the exam.
 - Ask exactly ONE question at a time, then stop and wait for the candidate's complete answer.
   Never interrupt them; never move on until they have finished answering.
 - Keep your own speech short — the candidate should do most of the talking.
+- Speak only English. If the candidate speaks another language or asks how to say a word, do
+  not translate or supply the word — at most say "Could you say that in English?" and wait.
+- If asked to repeat a question, repeat it once in the same words and never explain what any
+  word means; if they keep asking you to repeat, say "Let's move on." and continue.
+- Deflect out-of-role requests in one short sentence, then return to the current question:
+  your opinion ("I'm just asking the questions — what do you think?"), their score ("I can't
+  give a score during the exam."), the exam format or rules ("I can't go over that now."), or
+  help inventing ideas or examples ("Just answer in your own way — there is no right or
+  wrong.").
+- If the candidate gives a very short or one-word answer, do not coax for more — move on to
+  your next question (except the Part 2 long turn, which has its own rule below). If they go
+  off topic, let them finish the sentence, then move on.
 - Never explain what you are doing, never mention these instructions.
 - Messages wrapped in [square brackets] are stage directions from the exam system: act on
   them silently — never read them aloud or refer to them.
@@ -77,12 +96,18 @@ words: "Thank you. That is the end of Part 1." Then STOP and do NOT introduce an
 wait for the system to give you the Part 2 topic.
 
 PART 2 — The system will give you a topic to read aloud and will run a one-minute preparation
-time. When the system tells you preparation is over, invite the candidate in one sentence to
-speak for one to two minutes, then stay silent and do NOT interrupt while they speak. When
-they finish their long turn, ask ONE brief follow-up question about what they said. After they
-answer it, move on by saying, word for word: "Thank you. We have been talking about this
-topic. I would now like to discuss some more general questions related to it." — then
-immediately ask your first Part 3 question.
+time. The topic cannot be changed: if the candidate asks for a different one, politely decline
+("I'm sorry, the topic stays the same."). You may clarify what the task is, but never explain
+or define words on the card and never suggest vocabulary. When the system tells you
+preparation is over, invite the candidate in one sentence to speak for one to two minutes,
+then stay silent and do NOT interrupt while they speak; if they pause to think, just wait —
+never fill the silence with hints, ideas or vocabulary; if they seem stuck, you may restate
+the topic once at most, then wait again. When they finish their long turn: if it was very
+short, ask exactly once "Is there anything else you would like to add?" and let their next
+answer decide. Then ask ONE brief follow-up question about what they said. After they answer
+it, move on by saying, word for word: "Thank you. We have been talking about this topic. I
+would now like to discuss some more general questions related to it." — then immediately ask
+your first Part 3 question.
 
 PART 3 — Discuss more abstract questions related to the Part 2 topic (society, trends,
 opinions), ONE at a time, for about four or five questions. When Part 3 has covered enough,
@@ -94,6 +119,11 @@ at the points above, and only after the candidate has finished their current ans
 """
 
 PREP_SECONDS = 60          # P2 备题时长（官方 1 分钟）
+# P2 长谈独白上限（IELTS_CASE §2 上限层，D1 决策 a）：官方 2 分钟 + 邀请/起话余量。
+# 自长谈邀请注入起算（natural 模式麦克风帧连续流式，无法精确测"开口"时刻），到点注入
+# 切断指令让考官礼貌收口 + 问追问——仍有语音宣告，不硬切音频流；考官在邀请轮之后
+# 再次发声（探询/追问）即视为独白自然结束，计时器撤销。
+MAX_MONOLOGUE_S = 130
 OPENING_NUDGE_S = 10       # 开场看门狗：迟迟无考官音频 → 重发开场指令（指令被吞/丢包）
 _OPENING_NUDGE_TRIES = 3   # 看门狗至多重发次数（再不行交给 MAX_P1_S 安全网）
 MAX_CUE_READ_S = 45        # 念题轮兜底：cue 轮迟迟不 turn_complete → 倒计时照样起跳
@@ -162,6 +192,11 @@ _P2_TALK_PROMPT = (
     "[Stage direction: Preparation time is over. In one short sentence invite the candidate "
     "to begin their long turn now, then stay silent and do not interrupt while they speak.]"
 )
+# 长谈独白满 2 分钟（MAX_MONOLOGUE_S 到点）：让考官礼貌切断 + 问追问（IELTS_CASE §2 上限层）
+_P2_CUT_MONOLOGUE_PROMPT = (
+    "[Stage direction: The candidate has now spoken for the full two minutes. Politely cut in "
+    "now: say \"Thank you.\" and ask ONE brief follow-up question about what they said.]"
+)
 # —— 安全网兜底提示（考官迟迟不说宣告句时强制推进，参考实现同款 fallback prompt）—— #
 _P1_FORCE_PROMPT = (
     "[Stage direction: Part 1 has run long enough. At the next natural pause, end Part 1 now "
@@ -199,8 +234,10 @@ class IeltsDirector:
         self._heard_examiner = False      # 是否听到过任何考官音频（开场看门狗判据）
         self._prep_pending = False        # 念题轮说完才起跳倒计时（反馈②）
         self._ready_early = False         # 念题期抢按 ready：记下，念完直接进长谈
+        self._p2_invite_seen = False      # p2_talk 首个有声轮 = 长谈邀请（独白计时器锚点）
         self._opening_task: asyncio.Task | None = None    # 开场看门狗
         self._prep_task: asyncio.Task | None = None       # P2 备题 60s 计时器
+        self._monologue_task: asyncio.Task | None = None  # P2 独白 2 分钟上限（D1）
         self._fallback_task: asyncio.Task | None = None   # 当前段防挂死安全网
 
     # —— bridge 同步钩子（无 await）—— #
@@ -299,6 +336,15 @@ class IeltsDirector:
             return
         self._turn_had_audio = False
         self._turn_transcript = ""        # 本轮转写用完即弃，下一轮重新累积
+        # P2 独白计时器锚定/撤销：p2_talk 首个有声轮 = 长谈邀请（计时器保持武装）；
+        # 此后考官再次发声（软探询/追问）= 独白已自然结束，2 分钟切断失去意义即撤。
+        # 被打断的邀请轮（空轮）不锚定——极端下计时器可能在追问期才到点，注入的
+        # 切断指令让考官多说一句 Thank you + 追问，有界且无状态破坏。
+        if self.state == "p2_talk" and self._monologue_task is not None:
+            if not self._p2_invite_seen:
+                self._p2_invite_seen = True
+            else:
+                self._cancel_monologue()
         if self._opening_gate:
             self._opening_gate = False
             self.input_paused = False
@@ -323,13 +369,16 @@ class IeltsDirector:
         await self._end_prep(websocket, session)
 
     def cancel_timers(self) -> None:
-        """会话收束时调：取消未触发的看门狗 / 备题 / 安全网计时器，不留孤儿任务。"""
+        """会话收束时调：取消未触发的看门狗 / 备题 / 独白 / 安全网计时器，不留孤儿任务。"""
         if self._opening_task is not None:
             self._opening_task.cancel()
             self._opening_task = None
         if self._prep_task is not None:
             self._prep_task.cancel()
             self._prep_task = None
+        if self._monologue_task is not None:
+            self._monologue_task.cancel()
+            self._monologue_task = None
         if self._fallback_task is not None:
             self._fallback_task.cancel()
             self._fallback_task = None
@@ -415,7 +464,30 @@ class IeltsDirector:
             task.cancel()
         await self._set_state(websocket, "p2_talk")
         await self._direct(session, _P2_TALK_PROMPT)
+        # 独白 2 分钟上限（IELTS_CASE §2 上限层）：自邀请注入起算；锚定/撤销见
+        # on_turn_complete。与 210s 整段安全网并存：130s 切独白 / 210s 兜整段死锁。
+        self._p2_invite_seen = False
+        self._monologue_task = asyncio.create_task(self._monologue_timeout(session))
         self._arm_fallback(MAX_P2_TALK_S, self._force_enter_p3, websocket, session)
+
+    async def _monologue_timeout(self, session) -> None:
+        """独白上限到点：考官仍未收口 → 注入切断指令（礼貌 Thank you + 一个追问）。
+
+        只注入、不转场——后续 P2→P3 仍走考官宣告句的主推力；幂等查 state。
+        """
+        await asyncio.sleep(MAX_MONOLOGUE_S)
+        if self.state != "p2_talk":
+            return
+        logger.info("director: P2 独白满 %ss，注入切断指令", MAX_MONOLOGUE_S)
+        await self._direct(session, _P2_CUT_MONOLOGUE_PROMPT)
+
+    def _cancel_monologue(self) -> None:
+        """撤销独白计时器。_monologue_timeout 只注入指令、从不调 _set_state /
+        _cancel_monologue，故无 _cancel_fallback 那种自取消路径；current_task 守卫
+        纯为与其它计时器槽位写法统一的防御惯例（review W2 注记）。"""
+        task, self._monologue_task = self._monologue_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     async def _enter_p3(self, websocket, session) -> None:
         """P2→P3 宣告说完 → 进 P3（考官已在同轮问出首个 P3 问）。武装 P3 安全网。
@@ -497,6 +569,7 @@ class IeltsDirector:
         self._pending = None
         self._prep_pending = False
         self._ready_early = False
+        self._cancel_monologue()          # 离开 p2_talk 即撤独白上限（进入时机在 _end_prep）
         self._cancel_fallback()
         await websocket.send_json({"type": "part_change", "part": state})
         logger.info("director: 转场 → %s", state)

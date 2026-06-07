@@ -97,6 +97,7 @@
 - [ ] 方括号舞台指令下行过滤（模型违规读出时原文直达前端气泡，现纯 persona 软防线）——`bridge.py:174`
 - [ ] `GET /progress` series 加 `is_seed` 标注（seed 爬升点与真实点混排，用户会误认演示数据为自己进步；Library 有标注 Review 曲线没有）——`review.py` BandPoint/FluencyPoint + `crud.list_completed_reports`，连带 SCHEMA §6.4 + handoff 前端
 - [ ] `.env.example` 补 `APP_RELOAD`（live 联调必关）/ `JUDGE_MODEL`（503 绕行）/ `WHISPER_MODEL` 注释
+- [ ] 报告 band 加「参考估分，非官方雅思成绩」标注（IELTS_CASE §5 要点④ / 审阅 M3）：前端 Report 页 Band 区一行灰字小注（评分术语英文、解释中文），零后端改动——连带 handoff 前端
 - [ ] `gemini_live.py` 与 config 对齐：硬编码代理回落 `127.0.0.1:7897` + 不读 `.env`（照 CLAUDE.md 步骤首跑即踩）——`gemini_live.py:33,64`
 
 **🔵 文档漂移 / 低优先**
@@ -104,6 +105,8 @@
 - [ ] 契约注记打包：SCHEMA §6.2 `duration_s` 语义分叉（live 墙钟 vs B 录音累加）/ §5.1 漏 `reports.created_at` / SCENARIO.md §4 ask_help 标「已移拓展」/ FRONTEND §5 `examiner_speaking` 加「后端不发，前端音频帧近似」注
 - [ ] 小优化打包：`load_band_descriptors` 加 lru_cache（题库有它没有）/ TTS 末题后多睡 6.5s / db.py `_ensure_columns` 对新库是死代码（双真相源加注释）
 - [ ] H1 跟踪落地：`signals.py` 停顿计算源头加 TEST.md H1 注释（现仅 pipeline 两处有、源头无）；本条即主 TODO 跟踪锚点
+- [ ] 方式 A 整场软上限（IELTS_CASE §1 / 审阅 M4）：`live_ws.py` 以 session_start 加 ~20min 软上限到点注入 `_CLOSING_FORCE_PROMPT` 收官；分段超时（MAX_P1/P2/P3）已兜大头，收益有限
+- [ ] IELTS_CASE D2 设计决策记录：spec「语义完成结构化字段（continue/probe/transition）」与 Live 纯音频流矛盾——审阅判 conflict，现行短语检测+延迟兑现+分层超时为等价替代（默认维持）；要真结构化需旁路文本判官（每轮加一次 LLM 调用，加延迟成本），如需贴 spec 再立项
 
 ### 拓展（最后优化，不在 24h 主线）
 - [ ] 雅思原题库：`ielts_questions` 表 + 录入/查询/删除接口；`GET /questions` 优先原题库、回退静态库（SCHEMA §7）
@@ -133,3 +136,4 @@
 
 
 2026-06-07 — **P5 persona 教练协议完成**（PR #27）：persona 拆场景差异段 + 共享规则段（`_persona` 合成，「加 case 只写场景段」强化）；落地 `docs/SCENARIO_CASE.md` 12 条边际中 11 条的 prompt 侧（删原「politely check what they mean」反向行为；D1 沉默留 PR-2 客户端计时器 + nudge）；judge SCENARIO_INSTRUCTIONS 加中文求助乱码防失真。pytest 237 绿（+4）+ review PASS（2 条 prompt 张力建议——守角色 vs 破壁自相矛盾 / 一句话上限与 A3 打架——已修）+ 用户真 Live 冒烟通过。无阻塞。下次：PR-2 沉默 nudge（前端计时器 + stage 分级舞台指令）或 PR-3 language_help function calling（先冒烟 preview 模型 tool 支持）
+2026-06-07 — **IELTS_CASE 边际场景审阅 + 护栏落地**（38-agent workflow 审阅 → PR #28）：5 维度对照 docs/IELTS_CASE.md 审计 42 findings（17 pass / 2 决策项 / 越界 case persona 近零覆盖为最大短板，逐条对抗复核 + 查漏全覆盖）→ 用户拍板 M1+M2+D1 一个小 PR 落地：persona 越界守则（不教词/不表态/不救场总则 + 中文「Could you say that in English?」/重复一次/问分数/求编经历等 deflect 话术，关键话术单测 pin 防回潮）+ 长谈偏短软探询一次 + 独白 2 分钟上限（MAX_MONOLOGUE_S=130：邀请轮锚定/考官再发声即撤/到点注切断指令只注入不转场，与 210s 安全网并存）。pytest 241 绿（+4 用例）+ review PASS（2 warning 顺手修）+ 干净 worktree 验证防并行污染。余项入 TODO：M3 报告参考分标注（P9🟡 连带前端）/ M4 整场软上限（P9🔵）/ D2 维持短语检测替代（P9🔵 决策记录）。⚠️ 同树并行 backend session 在途（client/bridge/live_ws 脏文件），本 PR 严格只带两文件，checkout -m 切回 main 时 scenario_cases 两文件冲突已用备份恢复 / 下次：P9 余 🔴 两项（pyaudio / _pick_cue_card）

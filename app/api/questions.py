@@ -3,9 +3,15 @@
 题目来自静态库 `data/questions.json`（p2 同时充当方式 A 的 cue card 库），
 进程内缓存一次；`tts_url` 按预生成音频文件（data/tts/{id}.wav，TTS 项产出）
 的存在性回填——音频未生成时为 null，前端降级为纯文字读题。
+
+每请求随机抽样（方式 B 对齐拍板 D1/D2，2026-06-07）：对齐 live 考试节奏——
+p1/p3 每场从题库随机抽 5（live persona "about four or five questions"）、
+p2 每场 1 张 cue card（真考/live 同款单卡长谈，弃多卡连录）；题库全量保留作
+随机池（多次练习不重样）。方式 A 的 cue card 直读 _load_bank 不受影响。
 """
 
 import json
+import random
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,6 +21,8 @@ from pydantic import BaseModel
 router = APIRouter(tags=["questions"])
 
 VALID_PARTS = {"p1", "p2", "p3"}
+# 每场抽题量：p1/p3 五问对齐 live 节奏；p2 单卡 = 一次长谈
+SAMPLE_SIZE = {"p1": 5, "p2": 1, "p3": 5}
 
 # 路径用模块常量（非 settings）：静态资源位置是仓库布局的一部分，不随环境变化。
 # 以本文件位置锚定仓库根（app/api/ 上两级），不依赖进程 cwd（review W1）。
@@ -66,6 +74,9 @@ async def list_questions(
         raise HTTPException(
             status_code=422, detail=f"part 必须是 {sorted(VALID_PARTS)} 之一"
         )
+    items = _load_bank()[part]
+    # 每请求随机抽样（见模块 docstring）；题库小于抽样量时全量返回不报错
+    sampled = random.sample(items, min(SAMPLE_SIZE[part], len(items)))
     return [
         Question(
             id=item["id"],
@@ -74,5 +85,5 @@ async def list_questions(
             bullets=item.get("bullets"),
             tts_url=_tts_url(item["id"]),
         )
-        for item in _load_bank()[part]
+        for item in sampled
     ]

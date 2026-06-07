@@ -143,3 +143,28 @@ def test_ielts_exam_prompt_unchanged_band_flow():
     p = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="exam")
     assert "按官方四维给 band" in p
     assert "方式 B" not in p
+
+
+def test_exam_prompt_explains_exam_mechanics_b_does_not():
+    # 方式 B 对齐批次 A3（2026-06-07）：考试机制免责（2 分钟切断/软探询非考生失误）
+    # 只进 exam 分支——B 无 live 切断机制，注入即幻觉式免责（交叉复核警示）
+    from app.judge.prompt import build_judge_prompt
+
+    exam = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="exam")
+    assert "礼貌\n打断" in exam or "礼貌打断" in exam.replace("\n", "")
+    assert "anything else you would like to add" in exam
+    for sub in ("module_p1", "module_p2", "module_p3"):
+        b = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode=sub)
+        assert "礼貌打断" not in b.replace("\n", "")
+        assert "anything else you would like to add" not in b
+
+
+def test_module_p2_focus_mentions_long_turn_duration():
+    # 方式 B 对齐批次 A2：单卡长谈语义 + speaking_time_s 对照 1–2 分钟评达标度
+    from app.judge.prompt import build_judge_prompt
+
+    p = build_judge_prompt("ielts", transcript_text="t", signals={}, sub_mode="module_p2")
+    flat = p.replace("\n", "")
+    assert "仅一张卡一次长谈" in flat
+    assert "speaking_time_s" in flat
+    assert "不作为语言错误证据" in flat

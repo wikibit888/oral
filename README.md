@@ -55,6 +55,11 @@ cd frontend && npm install && npm run dev   # 前端 dev server（/api 代理到
 uv run pytest                  # 后端测试
 cd frontend && npm test        # 前端测试
 ```
+## 演示视频
+
+通过网盘分享的文件：题目一口语助手demo演示.mov
+链接: https://pan.baidu.com/s/1Fb9YEHHWAeaKQRKio0L2Yg?pwd=f7pn 提取码: f7pn 
+
 
 ## 目录
 

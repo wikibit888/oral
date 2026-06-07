@@ -15,6 +15,8 @@ from app.report import (
     Dimension,
     Dimensions,
     FrequentError,
+    LiveCorrection,
+    LiveFeedback,
     PracticeSummary,
     Report,
     SyntacticAnalysis,
@@ -179,6 +181,27 @@ def test_scenario_pipeline_injects_case_judge_focus(tmp_db, monkeypatch, case):
 
     assert captured["scenario_case"] == case
     assert captured["case_prompt"] == scenario_cases.CASES[case].judge_focus
+
+
+def test_finalize_passes_live_feedback_to_judge(tmp_db, monkeypatch):
+    # live_ws 收口传入的 FC 实录原样透传 run_judge（情景 live 链路）
+    captured = _patch_stages(monkeypatch, _scenario_report())
+    _seed_session("scenario", scenario_case="ordering", status="live")
+    pipeline.ingest_clip("s1", "/fake.wav")
+    lf = LiveFeedback(
+        corrections=[LiveCorrection(original="a cat", fixed="the cat", note="article", spoken=True)],
+        teachings=[],
+    )
+    pipeline.finalize_session("s1", live_feedback=lf)
+    assert captured["live_feedback"] == lf
+
+
+def test_finalize_defaults_live_feedback_none(tmp_db, monkeypatch):
+    # 方式 B 入口（sessions review）不传实录：默认 None 原样到 judge
+    captured = _patch_stages(monkeypatch, _ielts_report())
+    _seed_session("ielts", sub_mode="module_p1")
+    _ingest_and_finalize()
+    assert captured["live_feedback"] is None
 
 
 def test_scenario_pipeline_leaves_band_columns_null(tmp_db, monkeypatch):

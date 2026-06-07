@@ -16,7 +16,7 @@ import logging
 from app import crud
 from app.judge.run import run_judge, upload_clip
 from app.models import AudioClip, Transcript, Word, transcript_from_json, transcript_to_json
-from app.report import Report
+from app.report import LiveFeedback, Report
 from app.scenario_cases import judge_focus
 from app.signals import ObjectiveSignals, compute_signals
 from app.transcribe import transcribe
@@ -56,12 +56,16 @@ def ingest_clip(
     return turn_id
 
 
-def finalize_session(session_id: str, *, sessions: int = 1) -> None:
+def finalize_session(
+    session_id: str, *, sessions: int = 1, live_feedback: LiveFeedback | None = None
+) -> None:
     """会话结束的收口：合并已就绪的切片转写 → 一次信号计算 → 一次 judge → 报告落库。
 
     增量流水线保证走到这里时转写 / 预上传已全部完成，唯一剩余耗时 = 一次 judge
     调用（flash 级 + 结构化输出）→ 报告 ≤5s 可见。
     任一环节异常 → status=failed 并向上抛（日志留痕），不写半份报告。
+    live_feedback：情景 live 会话的 FC 反馈实录（live_ws 收口时从应答台取走传入）；
+    方式 B / 雅思调用方不传，run_judge 内另有模式守门。
     """
     session = crud.get_session(session_id)
     if session is None:
@@ -93,6 +97,7 @@ def finalize_session(session_id: str, *, sessions: int = 1) -> None:
             scenario_case=session["scenario_case"],
             # 情景 case 侧重段（注册表查得；非情景 / 未知 case 为 None，prompt 层降级占位）
             case_prompt=judge_focus(session["scenario_case"]),
+            live_feedback=live_feedback,
             sessions=sessions,
             recordings=len(rows),
         )

@@ -54,6 +54,8 @@
 - [x] 点餐 persona prompt + judge prompt——2026-06-07 PR #21：`app/scenario_cases.py` case 注册表（persona + judge_focus，加 case 只改注册表；白名单推导 + finalize 回填 case_prompt）；真冒烟守角色 + 自然收尾、judge 命中点餐侧重且零 band 泄漏
 - [x] 会议 persona prompt + judge prompt——随 PR #21：meeting persona 礼貌质疑追问 blocker、收尾确认行动项，真冒烟过
 - [x] persona 教练协议（场景段 + 共享规则段重构，`docs/SCENARIO_CASE.md` A/B/C 类边际落地）——2026-06-07 PR #27：夹中文 recast / 整句中文等复述 / 显式求助（中英文问法同协议）给词 + 场景例句 / 控制指令即时响应（慢/重复/换说法/解释回位/难度保持/口头暂停重开/无关问题带回）；judge 防失真两行（中文求助乱码转写不计错误）；237 测绿 + review PASS + 真 Live 冒烟过
+- [x] language_help function calling（模型自带翻译调 tool，按 case 注入场景）——2026-06-07 PR #29：`app/live/help.py` 应答台（模板轮换控形 + 90s 窗口连续 3 次控频 + teaching 事件直发前端）+ tool 声明按 case 生成（scene_label 注入，「落后」meeting 场景译 behind schedule 实锤）+ bridge tool_call 分支回包；方式 A 零 tools 保持中立；259 测绿 + 双 case 真冒烟 + review PASS
+- [x] D1 沉默分级探询（nudge 控制消息 + 三级舞台指令）——2026-06-07 PR #30：前端计时器分级发 nudge {stage}，后端 ScenarioNudger 查表注入（①轻提示 ②句头 ③给选项+确认）+ 8s 防抖 + stage 钳制；C5 暂停互斥内置指令文本由模型裁决；方式 A 忽略 nudge；271 测绿 + review PASS；前端计时器件随 handoff/inbox/011
 - [ ] case 选择页（验证 + review）
 
 ### P6 报告 + 进步 UI（~4h）
@@ -91,7 +93,7 @@
 - [x] p2_talk 长谈 2 分钟上限计时器（现全靠模型自觉，不接手则 FSM 卡死）——2026-06-07 随 PR #26：MAX_P2_TALK_S=210s 安全网（长谈+追问+转场上限，到点逼考官说转场句进 P3），各段均有同款防挂死计时器
 - [ ] PTT 按住不松直接 End：`activity_open` 悬挂不发 `activity_end`（疑与 done/004 上游 1007 相关）+ 测试——`bridge.py:102`
 - [ ] director `_prep_task` 纳入强引用集合 + `_end_prep` 写已关 WS 加 suppress（竞态日志噪音）——`director.py:176,190`
-- [ ] Live session 并发写防护（导演 `send_client_content` 与上行 `send_realtime_input` 无锁交错，1008 根因候选）——随 P8 1008 复查一并处理（加锁或 turn_complete=False 探针）
+- [ ] Live session 并发写防护（导演 `send_client_content` 与上行 `send_realtime_input` 无锁交错，1008 根因候选；**PR #29 新增第三个写点**：下行泵 `send_tool_response` 与上行音频并发——review W2 在册）——随 P8 1008 复查一并处理（加锁或 turn_complete=False 探针）
 - [ ] `DELETE /sessions` 加状态门或测试钉死「任意状态可删」为设计决策（现 completed/processing 也能物理删除）——`sessions.py:142`
 - [ ] scenario 全空诊断标 `unscorable`（对齐方式 B 的 `_diagnostics_empty` 检查，防零反馈 completed 报告）——`run.py:217`
 - [ ] 方括号舞台指令下行过滤（模型违规读出时原文直达前端气泡，现纯 persona 软防线）——`bridge.py:174`
@@ -137,3 +139,4 @@
 
 2026-06-07 — **P5 persona 教练协议完成**（PR #27）：persona 拆场景差异段 + 共享规则段（`_persona` 合成，「加 case 只写场景段」强化）；落地 `docs/SCENARIO_CASE.md` 12 条边际中 11 条的 prompt 侧（删原「politely check what they mean」反向行为；D1 沉默留 PR-2 客户端计时器 + nudge）；judge SCENARIO_INSTRUCTIONS 加中文求助乱码防失真。pytest 237 绿（+4）+ review PASS（2 条 prompt 张力建议——守角色 vs 破壁自相矛盾 / 一句话上限与 A3 打架——已修）+ 用户真 Live 冒烟通过。无阻塞。下次：PR-2 沉默 nudge（前端计时器 + stage 分级舞台指令）或 PR-3 language_help function calling（先冒烟 preview 模型 tool 支持）
 2026-06-07 — **IELTS_CASE 边际场景审阅 + 护栏落地**（38-agent workflow 审阅 → PR #28）：5 维度对照 docs/IELTS_CASE.md 审计 42 findings（17 pass / 2 决策项 / 越界 case persona 近零覆盖为最大短板，逐条对抗复核 + 查漏全覆盖）→ 用户拍板 M1+M2+D1 一个小 PR 落地：persona 越界守则（不教词/不表态/不救场总则 + 中文「Could you say that in English?」/重复一次/问分数/求编经历等 deflect 话术，关键话术单测 pin 防回潮）+ 长谈偏短软探询一次 + 独白 2 分钟上限（MAX_MONOLOGUE_S=130：邀请轮锚定/考官再发声即撤/到点注切断指令只注入不转场，与 210s 安全网并存）。pytest 241 绿（+4 用例）+ review PASS（2 warning 顺手修）+ 干净 worktree 验证防并行污染。余项入 TODO：M3 报告参考分标注（P9🟡 连带前端）/ M4 整场软上限（P9🔵）/ D2 维持短语检测替代（P9🔵 决策记录）。⚠️ 同树并行 backend session 在途（client/bridge/live_ws 脏文件），本 PR 严格只带两文件，checkout -m 切回 main 时 scenario_cases 两文件冲突已用备份恢复 / 下次：P9 余 🔴 两项（pyaudio / _pick_cue_card）
+2026-06-07 — **P5 情景边际两连发**（PR #29 language_help FC + PR #30 D1 沉默 nudge）：FC 分工反转（模型自带翻译调 tool，代码零外呼瞬时应答；teaching 事件给前端卡片）按 case 注入场景标签；nudge 三级渐进探询（阈值分级全在前端，后端查表 + 防抖；C5 暂停互斥由模型上下文裁决）。271 测绿 + 双 review PASS（空 tool_call 批防挂死 / PTT+缺 stage 全链用例随评修补）+ FC 双 case 真冒烟实锤（spaghetti / behind schedule 场景锚定）。⚠️ send_tool_response 成为 Live 并发写第三写点，已注记 P9 该项。前端件：teaching 卡片（handoff/inbox/010，已更新 branch 注）+ 沉默计时器（011 新投）。无阻塞。下次：teaching 落库进报告（学习闭环）或 P9 余项

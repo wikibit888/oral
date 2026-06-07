@@ -1,4 +1,4 @@
-"""language_help tool 的会话内应答台（情景对话教练协议的结构化通道）。
+"""情景对话教练协议的会话内运行时：language_help 应答台 + 沉默 nudge 执行端。
 
 模型自带翻译调用 language_help（声明见 scenario_cases.LANGUAGE_HELP_TOOL——
 翻译不在代码侧做：Live 模型自己就是最好的带语境翻译器，tool 若再外呼模型，
@@ -11,14 +11,24 @@
 ③连续求助控频：窗口内连续第 N 次起换「鼓励先自己试」指令
   （SCENARIO_CASE.md A4 的「查词典模式」风险在代码里硬解）。
 
-仅情景对话接线（live_ws）；方式 A 考官不声明 tools，保持中立零破壁。
+ScenarioNudger 是 D1 沉默分级探询的后端执行端（SCENARIO_CASE.md D1）：前端
+沉默计时器分级发 nudge {stage} 控制消息（bridge 上行泵接线），这里查表注入
+分级舞台指令 + 防抖。
+
+仅情景对话接线（live_ws）；方式 A 考官不声明 tools 也不接 nudge，保持中立零破壁。
 """
 
 import logging
 import time
 from contextlib import suppress
 
-from app.scenario_cases import CASES, HELP_DIRECTIVES, HELP_OVERUSE_DIRECTIVE
+from app.live.director import send_stage_direction
+from app.scenario_cases import (
+    CASES,
+    HELP_DIRECTIVES,
+    HELP_OVERUSE_DIRECTIVE,
+    NUDGE_DIRECTIVES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,4 +111,43 @@ class LanguageHelpDesk:
             template.replace("{scene}", self._scene)
             .replace("{english}", english)
             .replace("{example}", example)
+        )
+
+
+NUDGE_DEBOUNCE_S = 8   # 距上次 nudge < 此值忽略（防前端计时器 bug 连发轰炸模型）
+
+
+class ScenarioNudger:
+    """D1 沉默分级探询的后端执行端。状态只在事件循环线程被触碰（无锁）。
+
+    阈值与分级判断全在前端（只有前端知道播放队列何时排空、麦克风有没有人声，
+    与方式 A「前端播完收尾语音自动收束」同一判断归属）；后端只做①按 stage
+    查表注入舞台指令 ②防抖。C5 口头暂停与 nudge 的互斥内置在指令文本里，
+    由模型用对话上下文裁决。
+    """
+
+    def __init__(self, case: str, *, clock=time.monotonic):
+        # 入口已按白名单守门（live_ws._parse_params），直查快败
+        self._scene = CASES[case].scene_label
+        self._clock = clock         # 可注入假钟（防抖测试确定性）
+        self._last_at: float | None = None
+
+    async def on_nudge(self, session, stage) -> None:
+        """注入一条分级探询舞台指令；防抖窗口内的重复 nudge 忽略。
+
+        stage 来自前端 JSON（不可信输入）：非整数按 1（最轻介入）处理，
+        越界钳制到模板键域——任何取值都不该让会话崩。
+        """
+        now = self._clock()
+        if self._last_at is not None and now - self._last_at < NUDGE_DEBOUNCE_S:
+            logger.debug("nudge 防抖忽略：距上次 %.1fs", now - self._last_at)
+            return
+        self._last_at = now
+        try:
+            stage = int(stage)
+        except (TypeError, ValueError):
+            stage = 1
+        stage = min(max(stage, min(NUDGE_DIRECTIVES)), max(NUDGE_DIRECTIVES))
+        await send_stage_direction(
+            session, NUDGE_DIRECTIVES[stage].replace("{scene}", self._scene)
         )

@@ -12,6 +12,7 @@ from app.scenario_cases import (
     CASES,
     HELP_DIRECTIVES,
     HELP_OVERUSE_DIRECTIVE,
+    NUDGE_DIRECTIVES,
     judge_focus,
     language_help_tool,
 )
@@ -176,6 +177,22 @@ def test_help_directives_contract():
     assert "{" not in HELP_OVERUSE_DIRECTIVE.replace("{english}", "").replace(
         "{scene}", ""
     )
+
+
+def test_nudge_directives_contract():
+    """D1 分级探询模板契约：三级渐进、方括号舞台指令形态、暂停互斥内置、
+    槽位只用 {scene}（SCENARIO_CASE.md D1 + C5）。"""
+    assert set(NUDGE_DIRECTIVES) == {1, 2, 3}
+    for stage, d in NUDGE_DIRECTIVES.items():
+        assert d.startswith("[Stage direction:"), stage
+        assert d.endswith("]"), stage
+        # C5 互斥：用户此前要求暂停则继续沉默（模型用上下文裁决）
+        assert "pause" in d and "silent" in d, stage
+        assert "{" not in d.replace("{scene}", ""), stage   # 无未知槽位
+    # 分级语义：① 轻提示不教内容 ② 给句头 ③ 给选项 + 确认是否继续
+    assert "check in" in NUDGE_DIRECTIVES[1]
+    assert "starter" in NUDGE_DIRECTIVES[2]
+    assert "continue" in NUDGE_DIRECTIVES[3]
 
 
 def test_personas_wired_to_language_help_tool():

@@ -259,6 +259,54 @@ def test_scenario_empty_tool_call_batch_no_send_no_hang(client, monkeypatch, fun
     assert session.tool_responses == []      # 未回包（语义未知，仅日志）
 
 
+def test_scenario_nudge_injects_staged_direction(client, monkeypatch):
+    """全链 nudge 流：前端沉默计时器发 nudge {stage} → 分级舞台指令进 Live。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        ws.send_text(json.dumps({"type": "nudge", "stage": 2}))
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    # directions[0] 是开场指令，[1] 是 stage 2 探询（句头 starter + 场景标签）
+    assert len(session.directions) == 2
+    nudge_text = session.directions[1].parts[0].text
+    assert nudge_text.startswith("[Stage direction:")
+    assert "starter" in nudge_text
+    assert SCENARIO_CASES["ordering"].scene_label in nudge_text
+
+
+def test_scenario_nudge_ptt_and_missing_stage(client, monkeypatch):
+    """nudge 在 PTT 模式同样生效；缺 stage 字段按最轻一级（①轻提示）处理。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=meeting&turn=ptt") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        ws.send_text(json.dumps({"type": "nudge"}))      # 无 stage 字段
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert len(session.directions) == 2
+    nudge_text = session.directions[1].parts[0].text
+    assert "check in" in nudge_text                       # stage 1 文本
+
+
+def test_ielts_a_nudge_ignored(client, monkeypatch):
+    """方式 A 不接 nudge（考官中立不探询）：消息被忽略、不致断流。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        assert ws.receive_json() == {"type": "part_change", "part": "p1"}
+        ws.send_text(json.dumps({"type": "nudge", "stage": 3}))
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    # 只有导演开场指令，nudge 未注入任何东西
+    assert len(session.directions) == 1
+
+
 def test_scenario_opener_randomly_picked_from_registry(client, monkeypatch):
     """开场模板随机抽：钉死 random.choice 的输入是该 case 的 openers 全集。"""
     session = FakeLiveSession(responses=[])

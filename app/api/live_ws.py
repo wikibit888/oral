@@ -31,7 +31,7 @@ from app.live.director import (
     IeltsDirector,
     send_stage_direction,
 )
-from app.live.help import LanguageHelpDesk
+from app.live.help import LanguageHelpDesk, ScenarioNudger
 from app.live.tee import UserAudioTee
 from app.pipeline import finalize_session
 from app.scenario_cases import CASES as SCENARIO_CASES, language_help_tool
@@ -148,6 +148,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 _schedule_finalize(tee, session_id)
 
             tool_handler = None
+            nudger = None
             if sub_mode == "exam":
                 director = IeltsDirector(_pick_cue_card())
                 await director.start(websocket, live_session)
@@ -159,6 +160,9 @@ async def live_ws(websocket: WebSocket) -> None:
                 # language_help 应答台：模板控形 + 控频 + teaching 事件直发前端
                 # （case 感知：{scene} 槽 + 事件 case 字段）
                 tool_handler = LanguageHelpDesk(websocket, scenario_case)
+                # 沉默分级探询执行端：前端计时器发 nudge {stage}，查表注入
+                # 舞台指令（方式 A 不接——考官中立不探询）
+                nudger = ScenarioNudger(scenario_case)
 
             await bridge(
                 websocket,
@@ -168,6 +172,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 on_end_session=_on_end_session,
                 director=director,
                 tool_handler=tool_handler,
+                nudger=nudger,
             )
     except WebSocketDisconnect:
         pass  # 客户端正常断开

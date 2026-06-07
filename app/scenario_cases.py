@@ -301,3 +301,32 @@ HELP_OVERUSE_DIRECTIVE = (
     "them to try a full English sentence on their own before asking for the "
     "next word, and continue {scene}."
 )
+
+
+# —— D1 沉默分级探询（SCENARIO_CASE.md D1：渐进式介入，不一沉默就抢话）—— #
+# 前端沉默计时器分级发 nudge {stage}（阈值与分级判断全在前端——只有前端知道
+# 播放队列何时排空、麦克风有没有人声），后端只查表注入舞台指令
+# （app/live/help.py ScenarioNudger，含防抖）。
+# 每级都内置「用户若此前要求暂停则继续沉默」——C5 口头暂停与 nudge 的互斥
+# 由模型用对话上下文裁决，后端不用猜状态。{scene} 槽同指令模板填 scene_label。
+NUDGE_DIRECTIVES: dict[int, str] = {
+    1: (
+        "[Stage direction: The user has been quiet for a little while. In "
+        "character, gently check in with ONE short, friendly line and let "
+        "them know to take their time. If they asked to pause earlier, stay "
+        "silent and keep waiting.]"
+    ),
+    2: (
+        "[Stage direction: The user is still quiet — they may be stuck on "
+        "how to begin. Step out briefly: offer ONE short sentence starter "
+        "they could use right now in {scene}, invite them to finish it, then "
+        "wait. If they asked to pause earlier, stay silent.]"
+    ),
+    3: (
+        "[Stage direction: The user has been silent for a long time. Step "
+        "out briefly: offer two simple things they could say next in "
+        "{scene}, ask them to pick one or say it their own way, and check "
+        "whether they would like to continue. If they asked to pause "
+        "earlier, stay silent.]"
+    ),
+}

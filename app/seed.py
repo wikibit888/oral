@@ -82,7 +82,7 @@ SEED_SPECS: list[dict] = [
             ),
         ),
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Overuses 'you know' as filler", count=6)],
+            common_patterns=[CommonPattern(pattern="口头禅 you know 作填充", count=6)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="9 个主句中 7 个以 'I think I...' 开头，句式单一",
                 suggestion="试用 What I find interesting is... 或介词短语开头",
@@ -136,7 +136,7 @@ SEED_SPECS: list[dict] = [
         "ttr": 0.44, "error_rate": 4.2,
         "dims": None,
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Direct demands without polite forms", count=4)],
+            common_patterns=[CommonPattern(pattern="直接祈使索取（give me / I want），缺礼貌句式", count=4)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="点单全部用祈使句（give me / I want），缺少疑问式委婉表达",
                 suggestion="点餐场景优先 Could I have... / I'd like... 句式",
@@ -175,7 +175,7 @@ SEED_SPECS: list[dict] = [
         "ttr": 0.46, "error_rate": 3.6,
         "dims": None,
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Answers limited to one short sentence", count=5)],
+            common_patterns=[CommonPattern(pattern="单句短答不扩展", count=5)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="Part 1 问答平均仅 8 词/答，缺扩展（原因 / 例子）",
                 suggestion="用 because + 一个具体例子把每答撑到 2–3 句",
@@ -239,7 +239,7 @@ SEED_SPECS: list[dict] = [
             ),
         ),
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Chains clauses with 'and... and...'", count=4)],
+            common_patterns=[CommonPattern(pattern="and... and... 链式串句", count=4)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="长答案以 and 平行堆叠为主，主从复合句占比低",
                 suggestion="把第二个 and 换成 which / because 从句",
@@ -289,7 +289,7 @@ SEED_SPECS: list[dict] = [
         "ttr": 0.52, "error_rate": 2.6,
         "dims": None,
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Buries the conclusion after long background", count=3)],
+            common_patterns=[CommonPattern(pattern="先铺背景细节、结论后置", count=3)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="进度汇报先铺垫细节再给结论，听者要等 30 秒才知道状态",
                 suggestion="职场汇报结论先行：先一句 on track / blocked，再展开",
@@ -328,7 +328,7 @@ SEED_SPECS: list[dict] = [
         "ttr": 0.55, "error_rate": 2.1,
         "dims": None,
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Covers cue card bullets out of order, loses thread", count=2)],
+            common_patterns=[CommonPattern(pattern="cue card bullets 乱序展开、丢主线", count=2)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="长谈能撑满 2 分钟，但 bullets 间缺过渡句，话题跳切生硬",
                 suggestion="bullet 切换时用 As for... / What made it special was...",
@@ -391,7 +391,7 @@ SEED_SPECS: list[dict] = [
             ),
         ),
         "diagnostics_judge": dict(
-            common_patterns=[CommonPattern(pattern="Occasional restarts on abstract Part 3 topics", count=2)],
+            common_patterns=[CommonPattern(pattern="抽象题偶有句子重启", count=2)],
             syntactic_analysis=SyntacticAnalysis(
                 observation="从句嵌套与被动语态自发出现，句式多样性显著提升",
                 suggestion="保持现有广度，把准确率从约 50% 推向 70%",

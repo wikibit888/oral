@@ -179,6 +179,11 @@ async def _pump_downstream(
                     ]
                     if responses:
                         await session.send_tool_response(function_responses=responses)
+                    else:
+                        # 空 tool_call 批（function_calls 为 None/[]）：协议上不该
+                        # 出现；不回包（语义未知），记 warning 留排查线索——若实测
+                        # 出现挂死再升级处理（review W1）
+                        logger.warning("live WS 收到空 tool_call 批，未回包")
             if response.data:
                 if tee is not None:
                     tee.on_model_audio()    # 考官开口 = 用户切片的轮次边界

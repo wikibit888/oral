@@ -238,6 +238,27 @@ def test_scenario_tool_call_answered_and_teaching_event(client, monkeypatch):
     assert "spaghetti" in fr.response["directive"]
 
 
+@pytest.mark.parametrize("function_calls", [None, []])
+def test_scenario_empty_tool_call_batch_no_send_no_hang(client, monkeypatch, function_calls):
+    """空 tool_call 批（协议异常形态）：不回包、不挂死，会话照常收束（review W1）。"""
+    session = FakeLiveSession(
+        responses=[
+            SimpleNamespace(
+                data=None,
+                server_content=None,
+                tool_call=SimpleNamespace(function_calls=function_calls),
+            )
+        ]
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert session.tool_responses == []      # 未回包（语义未知，仅日志）
+
+
 def test_scenario_opener_randomly_picked_from_registry(client, monkeypatch):
     """开场模板随机抽：钉死 random.choice 的输入是该 case 的 openers 全集。"""
     session = FakeLiveSession(responses=[])

@@ -37,7 +37,9 @@ DIAGNOSTIC_INSTRUCTIONS = """\
 
 SCENARIO_INSTRUCTIONS = """\
 模式：情景对话。**不出 band、不出 overall_band**（band 是雅思 rubric 产物，套到情景会错配）。
-dimensions 与 overall_band 必须为 null；只产出诊断层 + 共享的客观流利度指标。\
+dimensions 与 overall_band 必须为 null；只产出诊断层 + 共享的客观流利度指标。
+情景对话允许用户夹中文向 AI 求助（教练协议）：transcript 中的非英语片段及其
+乱码（ASR 按英文强制转写中文的产物）不计入错误、不作为证据引用。\
 """
 
 # 方式 B 各 Part 的诊断侧重（IELTS.md §3：分模块练习，按 Part 特性给针对性反馈）

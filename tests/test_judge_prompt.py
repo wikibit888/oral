@@ -41,6 +41,8 @@ def test_scenario_prompt_no_band_no_descriptor():
     assert "IELTS Speaking Band Descriptors" not in p
     # case_prompt 缺省时给占位提示
     assert "P5" in p
+    # 教练协议防失真：中文求助的乱码转写不计错误、不作证据（SCENARIO_CASE.md A 类）
+    assert "不计入错误" in p
 
 
 def test_scenario_prompt_uses_case_prompt_when_given():

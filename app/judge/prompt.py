@@ -24,6 +24,20 @@ GROUNDING_RULES = """\
 4. 保持确定性与保守：同一段录音重复评分应高度一致。\
 """
 
+# 报告语言规范（用户确认 2026-06-07）：录音引用保持英文原文、改写示范句纯英文、
+# 解释性文字一律中文——报告面向中文用户，但学习材料必须是地道英文。
+LANGUAGE_RULES = """\
+输出语言规范（按字段执行）：
+1. 逐字引用类字段（evidence / examples / occurrences / original / initial / corrected）：
+   保持考生英文原话，一字不改（corrected 即考生自我修正后实际说的话，非理想答案）。
+2. rewrite：改写后的英文示范句，纯英文。
+3. suggestions / quick_fix / syntactic_analysis.suggestion：中文解释为主，
+   嵌入英文示例短语（如「试用 Could I have... 句式」）。
+4. 其余解释说明字段（explanation / reason / desc / observation /
+   descriptor_match / title / pattern）：一律用中文，可嵌英文原话片段。
+5. category / severity 等枚举字段按 schema 英文取值，不翻译。\
+"""
+
 DIAGNOSTIC_INSTRUCTIONS = """\
 诊断层（所有模式都要产出，填入 diagnostics）：
 - common_patterns：口头禅 / 重复用语 + 出现次数。
@@ -145,6 +159,8 @@ def build_judge_prompt(
             "你是严格、专业的英语口语考官 / 诊断教练。一次性产出整份结构化报告。",
             "",
             GROUNDING_RULES,
+            "",
+            LANGUAGE_RULES,
             "",
             mode_section,
             "",

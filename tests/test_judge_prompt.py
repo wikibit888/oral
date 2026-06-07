@@ -59,6 +59,22 @@ def test_unknown_mode_raises():
         build_judge_prompt("toefl", transcript_text=TRANSCRIPT, signals=SIGNALS)
 
 
+def test_language_rules_injected_all_modes():
+    """语言规范段三种模式都注入：引用一字不改 / rewrite 纯英文 / 解释一律中文。"""
+    prompts = [
+        build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="exam"),
+        build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="module_p1"),
+        build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="module_p2"),
+        build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="module_p3"),
+        build_judge_prompt("scenario", transcript_text=TRANSCRIPT, signals=SIGNALS, scenario_case="ordering"),
+    ]
+    for p in prompts:
+        assert "输出语言规范" in p
+        assert "一字不改" in p      # 录音引用保持原文
+        assert "纯英文" in p        # rewrite 英文示范句
+        assert "一律用中文" in p    # 解释性字段中文
+
+
 # —— 报告 schema —— #
 _DIAGNOSTICS = {
     "common_patterns": [{"pattern": "You know", "count": 2}],

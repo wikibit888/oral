@@ -10,6 +10,7 @@ import asyncio
 import pytest
 
 from app.live.help import (
+    GRAMMAR_SPEAK_GAP_S,
     HELP_OVERUSE_THRESHOLD,
     HELP_STREAK_WINDOW_S,
     NUDGE_DEBOUNCE_S,
@@ -18,6 +19,9 @@ from app.live.help import (
 )
 from app.scenario_cases import (
     CASES,
+    GRAMMAR_AFTER_HELP_DIRECTIVE,
+    GRAMMAR_SILENT_DIRECTIVE,
+    GRAMMAR_SPEAK_DIRECTIVES,
     HELP_DIRECTIVES,
     HELP_OVERUSE_DIRECTIVE,
     NUDGE_DIRECTIVES,
@@ -161,6 +165,135 @@ def test_broken_ws_does_not_break_tool_response():
         _desk(FakeWs(broken=True)).on_tool_call("language_help", _args())
     )
     assert "spaghetti" in result["directive"]
+
+
+# —— grammar_note（B1 语法纠错：检出归模型，呈现归控频三态）—— #
+
+
+def _gargs(**overrides):
+    base = {"original": "I go yesterday", "fixed": "I went yesterday", "note": "past tense"}
+    base.update(overrides)
+    return base
+
+
+def _gfill(template, fixed="I went yesterday", original="I go yesterday"):
+    return (
+        template.replace("{scene}", _SCENE)
+        .replace("{fixed}", fixed)
+        .replace("{original}", original)
+    )
+
+
+def test_grammar_speaks_up_front_and_sends_correction_event():
+    async def run():
+        ws = FakeWs()
+        desk = _desk(ws)
+        result = await desk.on_tool_call("grammar_note", _gargs())
+        # 单独出现：回答最前对照纠正（say {fixed}, not {original}），首条用变体[0]
+        assert result["directive"] == _gfill(GRAMMAR_SPEAK_DIRECTIVES[0])
+        assert "I went yesterday" in result["directive"]
+        assert "I go yesterday" in result["directive"]
+        assert ws.events == [
+            {
+                "type": "correction",
+                "case": "ordering",
+                "original": "I go yesterday",
+                "fixed": "I went yesterday",
+                "note": "past tense",
+                "spoken": True,
+            }
+        ]
+
+    asyncio.run(run())
+
+
+def test_grammar_after_chinese_help_same_turn():
+    # 与中文求助同轮（explicit_ask）：纠正放中文应答之后（用户决策），照常口头
+    async def run():
+        clock = FakeClock()
+        ws = FakeWs()
+        desk = _desk(ws, clock)
+        await desk.on_tool_call("language_help", _args(kind="explicit_ask"))
+        clock.advance(1)                      # 同轮窗口内（批内连发）
+        result = await desk.on_tool_call("grammar_note", _gargs())
+        assert result["directive"] == _gfill(GRAMMAR_AFTER_HELP_DIRECTIVE)
+        assert ws.events[-1]["spoken"] is True
+
+    asyncio.run(run())
+
+
+def test_grammar_before_language_help_speaks_up_front():
+    # 契约顺序：grammar_note 先于 language_help 到达（声明要求 call BEFORE
+    # speaking）——此时无同轮求助记录，走「回答最前」而非 after-help
+    async def run():
+        clock = FakeClock()
+        desk = _desk(clock=clock)
+        result = await desk.on_tool_call("grammar_note", _gargs())
+        assert result["directive"] == _gfill(GRAMMAR_SPEAK_DIRECTIVES[0])
+        clock.advance(1)
+        help_result = await desk.on_tool_call(
+            "language_help", _args(kind="explicit_ask")
+        )
+        assert "directive" in help_result      # 求助照常应答，互不干扰
+
+    asyncio.run(run())
+
+
+def test_grammar_same_turn_window_consumed_once():
+    # 同轮钟用后即耗（review W1）：一次 language_help 只配对一次 grammar_note——
+    # 窗口期内的第二条不再继承 mixed_cn 静默（首条 silent 未占间隔闸，故应口头）
+    async def run():
+        clock = FakeClock()
+        desk = _desk(clock=clock)
+        await desk.on_tool_call("language_help", _args(kind="mixed_cn"))
+        clock.advance(1)
+        first = await desk.on_tool_call("grammar_note", _gargs())
+        assert first["directive"] == _gfill(GRAMMAR_SILENT_DIRECTIVE)   # recast 覆盖
+        clock.advance(1)                          # 仍在 5s 窗口内
+        second = await desk.on_tool_call("grammar_note", _gargs(note="article"))
+        assert second["directive"] == _gfill(GRAMMAR_SPEAK_DIRECTIVES[0])  # 不被误静默
+
+    asyncio.run(run())
+
+
+def test_grammar_silent_when_mixed_cn_recast_covers_it():
+    # mixed_cn 同轮：recast 重述天然已纠正，口头静默但事件照发（确认的边际 #3）
+    async def run():
+        clock = FakeClock()
+        ws = FakeWs()
+        desk = _desk(ws, clock)
+        await desk.on_tool_call("language_help", _args(kind="mixed_cn"))
+        clock.advance(1)
+        result = await desk.on_tool_call("grammar_note", _gargs())
+        assert result["directive"] == _gfill(GRAMMAR_SILENT_DIRECTIVE)
+        correction = ws.events[-1]
+        assert correction["type"] == "correction" and correction["spoken"] is False
+
+    asyncio.run(run())
+
+
+def test_grammar_speak_gap_silences_followup():
+    # 间隔闸：45s 内第二条口头压掉（兼「每轮 ≤1」近似），事件照发
+    async def run():
+        clock = FakeClock()
+        ws = FakeWs()
+        desk = _desk(ws, clock)
+        first = await desk.on_tool_call("grammar_note", _gargs())
+        assert first["directive"] == _gfill(GRAMMAR_SPEAK_DIRECTIVES[0])
+        clock.advance(GRAMMAR_SPEAK_GAP_S - 1)
+        second = await desk.on_tool_call("grammar_note", _gargs(note="word choice"))
+        assert second["directive"] == _gfill(GRAMMAR_SILENT_DIRECTIVE)
+        assert ws.events[-1]["spoken"] is False
+        clock.advance(2)                      # 出闸恢复口头；第二次口头轮换到变体[1]
+        third = await desk.on_tool_call("grammar_note", _gargs(note="word choice"))
+        assert third["directive"] == _gfill(GRAMMAR_SPEAK_DIRECTIVES[1])
+
+    asyncio.run(run())
+
+
+def test_grammar_missing_args_safe():
+    result = asyncio.run(_desk().on_tool_call("grammar_note", {}))
+    assert "directive" in result               # 缺参不崩，空串填槽
 
 
 # —— ScenarioNudger（D1 沉默分级探询执行端）—— #

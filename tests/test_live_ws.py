@@ -261,6 +261,47 @@ def test_scenario_tool_call_answered_and_teaching_event(client, monkeypatch):
     assert "spaghetti" in fr.response["directive"]
 
 
+def test_scenario_grammar_tool_call_correction_event(client, monkeypatch):
+    """全链 grammar_note 流：模型检出语法错 → correction 事件 + 口头纠正指令回包。"""
+    tool_call = SimpleNamespace(
+        function_calls=[
+            SimpleNamespace(
+                id="fc-2",
+                name="grammar_note",
+                args={
+                    "original": "I go yesterday",
+                    "fixed": "I went yesterday",
+                    "note": "past tense",
+                },
+            )
+        ]
+    )
+    session = FakeLiveSession(
+        responses=[SimpleNamespace(data=None, server_content=None, tool_call=tool_call)]
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        event = ws.receive_json()        # correction 事件（结构化纠错卡片）
+        assert event == {
+            "type": "correction",
+            "case": "ordering",
+            "original": "I go yesterday",
+            "fixed": "I went yesterday",
+            "note": "past tense",
+            "spoken": True,
+        }
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    fr = session.tool_responses[0]
+    assert fr.id == "fc-2" and fr.name == "grammar_note"
+    # 首条口头纠正：回答最前对照纠正（say {fixed}, not {original}），非静默指令
+    assert "I went yesterday" in fr.response["directive"]
+    assert "I go yesterday" in fr.response["directive"]
+    assert "Before answering in character" in fr.response["directive"]
+
+
 @pytest.mark.parametrize("function_calls", [None, []])
 def test_scenario_empty_tool_call_batch_no_send_no_hang(client, monkeypatch, function_calls):
     """空 tool_call 批（协议异常形态）：不回包、不挂死，会话照常收束（review W1）。"""

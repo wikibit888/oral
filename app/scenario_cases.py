@@ -54,10 +54,14 @@ General rules (always):
 You are also the user's English coach. Whenever the user speaks Chinese —
 Chinese words mixed into English, a whole sentence in Chinese, or asking how
 to say something — call the language_help function, translating it yourself in
-the function arguments, then follow the directive it returns. When you give
-help, step out of the scene briefly — keep the help to one or two short
-English sentences — then return to the scene right away. If the function is
-unavailable, these defaults apply:
+the function arguments, then follow the directive it returns. If their last
+sentence has a clear grammar or word-choice mistake, call the grammar_note
+function with the wrong fragment and your fix, then follow the directive it
+returns — at most one per turn, the most important error; casual spoken
+shortcuts and fillers are fine. When you give help, step out
+of the scene briefly — keep the help to one or two short English sentences —
+then return to the scene right away. If the functions are unavailable, these
+defaults apply:
 - They mix Chinese words into an English sentence: do not stop the scene —
   reply in character and naturally recast their full sentence in correct
   English, so they hear the right version. Cover only the key content words;
@@ -188,15 +192,16 @@ def judge_focus(case: str | None) -> str | None:
     return spec.judge_focus if spec else None
 
 
-# —— language_help function calling（SCENARIO_CASE.md A 类的结构化通道）—— #
-# 分工反转的核心：模型把**自己的翻译**作为参数传进来（Live 模型自己就是最好的
-# 带语境翻译器），tool 纯本地零外呼——只负责结构化转发（teaching 事件）、模板
-# 控形与控频（app/live/help.py）。kind 即方案里的 intent 路由。
+# —— 情景教练 function calling（SCENARIO_CASE.md A 类 + B1 的结构化通道）—— #
+# 分工反转的核心：模型只负责**检出/翻译**（参数自带），呈现形态与频率由代码
+# 裁决（app/live/help.py）。单 tool 双声明：language_help（求助应答，kind 即
+# 方案里的 intent 路由）+ grammar_note（语法纠错检出，口头与否由控频三态决定，
+# 被静默的仍发 correction 事件进卡片）。
 # 仅情景对话注入（live_ws）；方式 A 考官不声明 tools，保持中立。
 # 声明按 case 生成（language_help_tool）：{scene} 槽填该 case 的 scene_label，
 # 模型选词 / 例句直接贴当前场景（点餐 vs 会议的「一词多译」选择靠它锚定，A3）。
 
-_LANGUAGE_HELP_TOOL_TEMPLATE = {
+_SCENARIO_TOOL_TEMPLATE = {
     "function_declarations": [
         {
             "name": "language_help",
@@ -240,26 +245,68 @@ _LANGUAGE_HELP_TOOL_TEMPLATE = {
                 },
                 "required": ["kind", "chinese", "english", "example"],
             },
-        }
+        },
+        {
+            "name": "grammar_note",
+            "description": (
+                "Call this whenever the user's last utterance contains a "
+                "clear grammar or word-choice error (wrong tense, missing "
+                "negation, subject-verb disagreement, wrong word, articles, "
+                "plurals). Do NOT call it for casual spoken shortcuts or "
+                "fillers — natural spoken English is fine. Never call it "
+                "for a sentence spoken in Chinese. Report at most ONE error "
+                "per turn — the most important one. Call it BEFORE you "
+                "start your spoken reply, not after. The conversation is "
+                "{scene}."
+            ),
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "original": {
+                        "type": "STRING",
+                        "description": (
+                            "The exact wrong fragment as they said it, "
+                            "verbatim — keep it short, just the few words "
+                            "around the error."
+                        ),
+                    },
+                    "fixed": {
+                        "type": "STRING",
+                        "description": (
+                            "The corrected version of that same fragment — "
+                            "same length, minimal change."
+                        ),
+                    },
+                    "note": {
+                        "type": "STRING",
+                        "description": (
+                            "A short error-type tag, e.g. \"past tense\", "
+                            "\"subject-verb agreement\", \"word choice\"."
+                        ),
+                    },
+                },
+                "required": ["original", "fixed", "note"],
+            },
+        },
     ]
 }
 
 
 def language_help_tool(case: str) -> dict:
-    """按 case 生成 language_help 声明：{scene} 槽填 scene_label。
+    """按 case 生成情景教练 tool（language_help + grammar_note 双声明）。
 
+    {scene} 槽填 scene_label——所有 declaration 的描述与参数描述统一替换。
+    单 tool 多声明是 Gemini 标准形态，连接层（live_ws）一个条目接全部教练函数。
+    函数名保持 language_help_tool 兼容既有接线。
     每条连接独立深拷贝——SDK 可能原地改动 config（client.py review W1 同源教训），
     模板常量绝不外漏可变引用。
     """
     label = CASES[case].scene_label
-    tool = copy.deepcopy(_LANGUAGE_HELP_TOOL_TEMPLATE)
-    decl = tool["function_declarations"][0]
-    decl["description"] = decl["description"].replace("{scene}", label)
-    props = decl["parameters"]["properties"]
-    for field in ("english", "example"):
-        props[field]["description"] = props[field]["description"].replace(
-            "{scene}", label
-        )
+    tool = copy.deepcopy(_SCENARIO_TOOL_TEMPLATE)
+    for decl in tool["function_declarations"]:
+        decl["description"] = decl["description"].replace("{scene}", label)
+        for prop in decl["parameters"]["properties"].values():
+            prop["description"] = prop["description"].replace("{scene}", label)
     return tool
 
 # 指令模板（tool response 的 directive 字段）：只定风格骨架，话由模型自己装——
@@ -300,6 +347,29 @@ HELP_OVERUSE_DIRECTIVE = (
     "Give them \"{english}\" in one short sentence, then warmly encourage "
     "them to try a full English sentence on their own before asking for the "
     "next word, and continue {scene}."
+)
+
+
+# 口头纠错指令三态（B1：示范优先于讲解、一句话量级；顺序规则为用户决策——
+# 单独时放回答最前、与中文求助同轮时放中文应答之后；控频压掉时静默）。
+# 对照式纠正（用户决策）：say {fixed}, not {original}——正确形式在前、错误在后，
+# 槽位由 help.py 填模型传来的片段。单独态 ≥2 变体轮换防生硬（同 HELP_DIRECTIVES）。
+GRAMMAR_SPEAK_DIRECTIVES: tuple[str, ...] = (
+    "Before answering in character, give ONE short correction that contrasts "
+    "the fix with what they said — e.g. \"Quick tip — say '{fixed}', not "
+    "'{original}'.\" Then continue {scene} as normal.",
+    "Start your reply with ONE short contrast correction — e.g. \"Small fix: "
+    "it's '{fixed}', not '{original}'.\" — then answer in character and "
+    "continue {scene} as normal.",
+)
+GRAMMAR_AFTER_HELP_DIRECTIVE = (
+    "Give the Chinese language help first. Right after it, add ONE short "
+    "contrast correction — e.g. \"Also, say '{fixed}', not '{original}'.\" — "
+    "then continue {scene} as normal."
+)
+GRAMMAR_SILENT_DIRECTIVE = (
+    "Do not mention this error out loud this time — just answer in character "
+    "and continue {scene} as normal."
 )
 
 

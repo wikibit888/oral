@@ -1,4 +1,4 @@
-"""情景对话教练协议的会话内运行时：language_help 应答台 + 沉默 nudge 执行端。
+"""情景对话教练协议的会话内运行时：language_help / grammar_note 应答台 + 沉默 nudge。
 
 模型自带翻译调用 language_help（声明见 scenario_cases.LANGUAGE_HELP_TOOL——
 翻译不在代码侧做：Live 模型自己就是最好的带语境翻译器，tool 若再外呼模型，
@@ -25,6 +25,9 @@ from contextlib import suppress
 from app.live.director import send_stage_direction
 from app.scenario_cases import (
     CASES,
+    GRAMMAR_AFTER_HELP_DIRECTIVE,
+    GRAMMAR_SILENT_DIRECTIVE,
+    GRAMMAR_SPEAK_DIRECTIVES,
     HELP_DIRECTIVES,
     HELP_OVERUSE_DIRECTIVE,
     NUDGE_DIRECTIVES,
@@ -36,6 +39,10 @@ HELP_STREAK_WINDOW_S = 90   # 距上次求助 < 此窗口算"连续"（否则计
 HELP_OVERUSE_THRESHOLD = 3  # 连续第 N 次求助起，改发「鼓励先自己试」指令
 
 _FALLBACK_KIND = "explicit_ask"   # 模型传了枚举外的 kind 时按显式求助应答
+
+# —— grammar_note 口头规则（出现即提示，用户决策）：被压掉的仍发 correction 事件 —— #
+GRAMMAR_SPEAK_GAP_S = 10        # 防同轮双发保险：模型违规一轮连调两次时压掉第二条
+_SAME_TURN_WINDOW_S = 5.0       # 距上次 language_help < 此窗口视作同轮（批内连发）
 
 
 class LanguageHelpDesk:
@@ -58,22 +65,35 @@ class LanguageHelpDesk:
         self._count = 0             # 累计求助次数：模板轮换游标
         self._streak = 0            # 连续求助计数：控频判据
         self._last_at: float | None = None
+        # grammar_note 控频状态（语法纠错与中文求助分开计）
+        self._last_help_at: float | None = None       # 同轮重叠判定专用钟（review W1：
+        self._last_help_kind: str | None = None       # 与 streak 钟分离，grammar 用后即耗）
+        self._grammar_spoken_at: float | None = None  # 口头纠错防双发闸
+        self._grammar_spoken_count = 0                # 口头纠错次数：模板轮换游标
 
     async def on_tool_call(self, name: str, args: dict) -> dict:
         """处理一次模型 tool 调用，返回 tool response 体（必须瞬时，无外呼）。
 
+        按工具名路由：language_help（求助应答）/ grammar_note（纠错控频）。
         未知工具名（模型幻觉）返回错误体不抛——宁可模型收到 error 后自行圆场，
         也不让整条会话因一次幻觉调用崩掉。
         """
-        if name != "language_help":
-            logger.warning("help: 未知 tool 调用被拒：%s", name)
-            return {"error": f"unknown tool: {name}"}
+        if name == "language_help":
+            return await self._on_language_help(args)
+        if name == "grammar_note":
+            return await self._on_grammar_note(args)
+        logger.warning("help: 未知 tool 调用被拒：%s", name)
+        return {"error": f"unknown tool: {name}"}
+
+    async def _on_language_help(self, args: dict) -> dict:
         kind = args.get("kind")
         if kind not in HELP_DIRECTIVES:
             logger.warning("help: 枚举外 kind=%r，按 %s 应答", kind, _FALLBACK_KIND)
             kind = _FALLBACK_KIND
         english = args.get("english") or ""
         example = args.get("example") or ""
+        self._last_help_at = self._clock()   # grammar 同轮重叠判定用（专用钟）
+        self._last_help_kind = kind
         directive = self._pick_directive(kind, english, example)
         # teaching 事件 best-effort：WS 已死说明会话正收束，不能连累 tool 响应
         # （模型还在等 send_tool_response，泵随取消收场）
@@ -112,6 +132,64 @@ class LanguageHelpDesk:
             .replace("{english}", english)
             .replace("{example}", example)
         )
+
+    async def _on_grammar_note(self, args: dict) -> dict:
+        """grammar_note：检出（模型）与呈现（这里控频）分离（SCENARIO_CASE.md B1）。
+
+        三态指令：①说——回答最前一句纠正（与中文求助同轮则放中文应答之后，
+        用户决策的顺序规则）；②静默——同轮双发压掉 / mixed_cn 同轮 recast
+        已覆盖。出现即提示（用户决策）：除上述两种静默外每轮必说一条。
+        无论说不说，correction 事件都发前端（spoken 标记区分），数据不丢。
+        """
+        now = self._clock()
+        original = args.get("original") or ""
+        fixed = args.get("fixed") or ""
+        note = (args.get("note") or "").strip().lower()
+        # 同轮判定用专用钟且**用后即耗**（review W1）：跨轮的快速衔接不再被
+        # 上一轮的 mixed_cn 误静默——一次 language_help 只配对一次 grammar_note
+        same_turn_help = (
+            self._last_help_at is not None
+            and now - self._last_help_at < _SAME_TURN_WINDOW_S
+        )
+        self._last_help_at = None
+        if same_turn_help and self._last_help_kind == "mixed_cn":
+            # recast 重述时天然已纠正，再口头提一遍是啰嗦（确认的边际 #3）
+            spoken, template = False, GRAMMAR_SILENT_DIRECTIVE
+        elif (
+            self._grammar_spoken_at is not None
+            and now - self._grammar_spoken_at < GRAMMAR_SPEAK_GAP_S
+        ):
+            spoken, template = False, GRAMMAR_SILENT_DIRECTIVE   # 防同轮双发
+        else:
+            spoken = True
+            self._grammar_spoken_at = now
+            self._grammar_spoken_count += 1
+            if same_turn_help:
+                template = GRAMMAR_AFTER_HELP_DIRECTIVE   # 中文应答之后（单模板）
+            else:
+                # 回答最前：≥2 变体按口头次数轮换（防多次纠错句式重复）
+                template = GRAMMAR_SPEAK_DIRECTIVES[
+                    (self._grammar_spoken_count - 1) % len(GRAMMAR_SPEAK_DIRECTIVES)
+                ]
+        # 对照式填槽（say {fixed}, not {original}）：{scene} 先填（受控文本），
+        # 模型产出的片段后填
+        directive = (
+            template.replace("{scene}", self._scene)
+            .replace("{fixed}", fixed)
+            .replace("{original}", original)
+        )
+        with suppress(Exception):
+            await self._ws.send_json(
+                {
+                    "type": "correction",
+                    "case": self._case,
+                    "original": original,
+                    "fixed": fixed,
+                    "note": note,
+                    "spoken": spoken,
+                }
+            )
+        return {"directive": directive}
 
 
 NUDGE_DEBOUNCE_S = 8   # 距上次 nudge < 此值忽略（防前端计时器 bug 连发轰炸模型）

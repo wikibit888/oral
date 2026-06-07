@@ -1,0 +1,196 @@
+/* Tailwind v4 入口 + Design tokens — 黑白主色调 + 翡翠绿高亮（编辑风，参考
+   joespeaking 骨架）。单一亮色主题；--accent 深翡翠保证白底文字对比度，
+   --accent-bright 亮薄荷做高亮标记/描边/装饰。
+   App.css 已于 Batch 4 全量迁移删除——样式 = @theme token + 本文件少量
+   组件类 + JSX 内联 utilities；recharts 不吃 CSS 变量，图表色与 token
+   手动同步（Review.jsx / BandRadar.jsx 注释）。 */
+@import 'tailwindcss';
+
+@theme {
+  /* 文字 */
+  --color-ink: #55555e; /* 正文 */
+  --color-ink-strong: #0a0a0a; /* 标题/强调 */
+
+  /* 底色与分隔 */
+  --color-paper: #ffffff;
+  --color-paper-soft: #f6f7f6;
+  --color-line: #e7e7ea;
+  --color-code-bg: #f4f4f2;
+
+  /* 翡翠绿高亮 */
+  --color-accent: #0d9c6e; /* 深翡翠：白底文字可读 */
+  --color-accent-bright: #3ecf8e; /* 亮薄荷：描边/装饰 */
+  --color-accent-soft: rgba(62, 207, 142, 0.12); /* 高亮底 */
+  --color-accent-line: rgba(62, 207, 142, 0.55); /* 高亮描边 */
+
+  /* 字体 */
+  --font-sans:
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui,
+    'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Instrument Serif', 'Songti SC', 'STSong', Georgia, serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+
+  /* 动画（编辑风入场 + 均衡器律动 + 流水线脉冲 + 骨架微光） */
+  --animate-rise: rise 0.65s cubic-bezier(0.22, 0.65, 0.3, 1) both;
+  --animate-equalize: equalize 1.5s ease-in-out infinite;
+  --animate-pipe-pulse: pipe-pulse 1.1s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+
+  @keyframes pipe-pulse {
+    50% {
+      transform: scale(1.5);
+      opacity: 0.6;
+    }
+  }
+
+  @keyframes shimmer {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  /* 录音红点呼吸 / 朗读指示脉冲（沉浸态，Batch 4） */
+  --animate-blink: blink 1.2s ease-in-out infinite;
+  --animate-reading-pulse: reading-pulse 1s ease-in-out infinite;
+
+  @keyframes blink {
+    50% {
+      opacity: 0.25;
+    }
+  }
+
+  @keyframes reading-pulse {
+    50% {
+      transform: scale(1.5);
+      opacity: 0.55;
+    }
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes equalize {
+    0%,
+    100% {
+      transform: scaleY(0.28);
+    }
+    50% {
+      transform: scaleY(1);
+    }
+  }
+}
+
+/* 全局基底：字号/行高/正文色/亮色 scheme */
+:root {
+  font: 16px/1.6 var(--font-sans);
+  color-scheme: light;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 共享组件类 —— 全站复用的小原语（按钮/眉题/弱化文字）。旧页面在各批次
+   重写时逐步切到这些类；App.css 同名存量规则（未分层，优先级更高）随消费方
+   清零后删除。 */
+@layer components {
+  /* 深色主 CTA（hero）：胶囊 + hover 转翡翠 + 按压回馈 */
+  .btn-dark {
+    @apply inline-flex items-center gap-2.5 rounded-full bg-ink-strong px-7 py-3.5 text-base font-semibold text-white no-underline transition-[background-color,transform,box-shadow] duration-250 hover:bg-accent hover:shadow-[0_8px_24px_-12px_rgba(13,156,110,0.6)] active:scale-[0.98];
+  }
+
+  .btn-dark .arrow {
+    @apply transition-transform duration-250;
+  }
+
+  .btn-dark:hover .arrow {
+    transform: translateY(3px);
+  }
+
+  /* 主按钮：深底胶囊（原 button.primary 的 Tailwind 版 + focus 环） */
+  .btn-primary {
+    @apply cursor-pointer rounded-full border-none bg-ink-strong px-5 py-2 font-[inherit] text-base font-semibold text-white transition-[background-color,transform] duration-250 hover:bg-accent active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  /* 幽灵按钮：描边胶囊（原 button.ghost） */
+  .btn-ghost {
+    @apply cursor-pointer rounded-full border border-line bg-paper px-5 py-2 font-[inherit] text-base font-semibold text-ink-strong transition-[border-color,background-color,transform] duration-250 hover:border-accent-bright active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  /* 眉题：小号加粗 + 字距 + 翡翠点 */
+  .eyebrow {
+    @apply mb-5.5 mt-0 flex items-center gap-[9px] font-sans text-[13px] font-semibold leading-none tracking-[0.14em] text-accent;
+  }
+
+  .eyebrow-dot {
+    @apply h-2 w-2 rounded-full bg-accent-bright shadow-[0_0_0_4px_var(--color-accent-soft)];
+  }
+
+  /* 弱化说明文字 */
+  .muted {
+    @apply font-mono text-sm leading-[1.4] text-ink;
+  }
+
+  /* 题目/cue card 要点列表（Record 题目卡 + Live P2 浮层与内联卡共用）；
+     preflight 重置 list-style，圆点显式声明 */
+  .prompt-list {
+    @apply m-0 list-disc pl-5 text-[14.5px] leading-[1.9];
+  }
+
+  /* 表单/请求错误条（色值保留原 #dc2626 体系，不并入 Tailwind red 色板） */
+  .form-error {
+    color: #dc2626;
+    font-size: 14px;
+    background: rgba(220, 38, 38, 0.08);
+    border: 1px solid rgba(220, 38, 38, 0.25);
+    border-radius: 8px;
+    padding: 10px 14px;
+    max-width: 640px;
+  }
+}
+
+/* 基线排版（preflight 之上的项目默认） */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: 34px;
+    font-weight: 400;
+    color: var(--color-ink-strong);
+    margin: 12px 0 16px;
+  }
+
+  a {
+    color: var(--color-accent);
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--color-code-bg);
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-ink-strong);
+  }
+}

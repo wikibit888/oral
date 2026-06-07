@@ -38,6 +38,7 @@ Thumbs.db
 # vibe coding
 docs/
 handoff/
+reverse/
 
 # SQLite 本地 demo 数据库
 *.db

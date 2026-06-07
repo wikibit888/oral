@@ -24,6 +24,7 @@ judge_focus 是 case 侧重段（中文，风格对齐 judge/prompt.py 的 MODUL
 通用诊断与禁 band 规则在 build_judge_prompt 内共享注入，这里只写差异。
 """
 
+import copy
 from dataclasses import dataclass
 
 
@@ -32,6 +33,8 @@ class ScenarioCase:
     persona: str                 # Live system_instruction（英文，角色扮演）
     judge_focus: str             # judge prompt 的 case 侧重段（中文，诊断导向）
     openers: tuple[str, ...]     # 开场舞台指令模板（建链随机抽一条，AI 先开口）
+    scene_label: str             # 英文场景短标签：注入 language_help tool 描述与
+                                 # 指令模板 {scene} 槽（带定冠词，如 "the ... scene"）
 
 
 # 共享规则段：通用约束 + 教练协议 + 控制指令响应（docs/SCENARIO_CASE.md 逐条落点）。
@@ -48,9 +51,13 @@ General rules (always):
   system: follow them silently — act on them but NEVER read them aloud or
   refer to them.
 
-You are also the user's English coach. When they need language help, step out
-of the scene briefly — keep the help to one or two short English sentences —
-then return to the scene right away:
+You are also the user's English coach. Whenever the user speaks Chinese —
+Chinese words mixed into English, a whole sentence in Chinese, or asking how
+to say something — call the language_help function, translating it yourself in
+the function arguments, then follow the directive it returns. When you give
+help, step out of the scene briefly — keep the help to one or two short
+English sentences — then return to the scene right away. If the function is
+unavailable, these defaults apply:
 - They mix Chinese words into an English sentence: do not stop the scene —
   reply in character and naturally recast their full sentence in correct
   English, so they hear the right version. Cover only the key content words;
@@ -160,11 +167,13 @@ CASES: dict[str, ScenarioCase] = {
         persona=_persona(_ORDERING_SCENE),
         judge_focus=_ORDERING_JUDGE_FOCUS,
         openers=_ORDERING_OPENERS,
+        scene_label="the restaurant ordering scene",
     ),
     "meeting": ScenarioCase(
         persona=_persona(_MEETING_SCENE),
         judge_focus=_MEETING_JUDGE_FOCUS,
         openers=_MEETING_OPENERS,
+        scene_label="the project status meeting",
     ),
 }
 
@@ -177,3 +186,118 @@ def judge_focus(case: str | None) -> str | None:
     """
     spec = CASES.get(case) if case else None
     return spec.judge_focus if spec else None
+
+
+# —— language_help function calling（SCENARIO_CASE.md A 类的结构化通道）—— #
+# 分工反转的核心：模型把**自己的翻译**作为参数传进来（Live 模型自己就是最好的
+# 带语境翻译器），tool 纯本地零外呼——只负责结构化转发（teaching 事件）、模板
+# 控形与控频（app/live/help.py）。kind 即方案里的 intent 路由。
+# 仅情景对话注入（live_ws）；方式 A 考官不声明 tools，保持中立。
+# 声明按 case 生成（language_help_tool）：{scene} 槽填该 case 的 scene_label，
+# 模型选词 / 例句直接贴当前场景（点餐 vs 会议的「一词多译」选择靠它锚定，A3）。
+
+_LANGUAGE_HELP_TOOL_TEMPLATE = {
+    "function_declarations": [
+        {
+            "name": "language_help",
+            "description": (
+                "Call this whenever the user speaks Chinese: Chinese words mixed "
+                "into an English sentence, a whole sentence in Chinese, or an "
+                "explicit ask like \"……怎么说?\" / \"How do I say ...?\". "
+                "Translate it yourself and pass the translation in. The "
+                "conversation is {scene}."
+            ),
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "kind": {
+                        "type": "STRING",
+                        "enum": ["mixed_cn", "full_sentence_cn", "explicit_ask"],
+                        "description": (
+                            "mixed_cn: Chinese words inside an English sentence; "
+                            "full_sentence_cn: the whole sentence is Chinese; "
+                            "explicit_ask: they explicitly ask how to say something."
+                        ),
+                    },
+                    "chinese": {
+                        "type": "STRING",
+                        "description": "The Chinese they said, as heard.",
+                    },
+                    "english": {
+                        "type": "STRING",
+                        "description": (
+                            "Your translation that best fits {scene} — one "
+                            "option, at most two."
+                        ),
+                    },
+                    "example": {
+                        "type": "STRING",
+                        "description": (
+                            "ONE short example sentence using it that fits "
+                            "{scene}."
+                        ),
+                    },
+                },
+                "required": ["kind", "chinese", "english", "example"],
+            },
+        }
+    ]
+}
+
+
+def language_help_tool(case: str) -> dict:
+    """按 case 生成 language_help 声明：{scene} 槽填 scene_label。
+
+    每条连接独立深拷贝——SDK 可能原地改动 config（client.py review W1 同源教训），
+    模板常量绝不外漏可变引用。
+    """
+    label = CASES[case].scene_label
+    tool = copy.deepcopy(_LANGUAGE_HELP_TOOL_TEMPLATE)
+    decl = tool["function_declarations"][0]
+    decl["description"] = decl["description"].replace("{scene}", label)
+    props = decl["parameters"]["properties"]
+    for field in ("english", "example"):
+        props[field]["description"] = props[field]["description"].replace(
+            "{scene}", label
+        )
+    return tool
+
+# 指令模板（tool response 的 directive 字段）：只定风格骨架，话由模型自己装——
+# {english}/{example} 槽由 help.py 填模型传来的翻译，{scene} 槽填当前 case 的
+# scene_label（回场景锚点带具体场景，比裸 "the scene" 拉得更稳）。
+# 每 kind ≥2 条轮换防生硬。行为契约与 persona 默认条款一致
+# （SCENARIO_CASE.md A1/A2/A4/C3 期望行为）。
+HELP_DIRECTIVES: dict[str, tuple[str, ...]] = {
+    "mixed_cn": (
+        "Do not stop the scene: casually confirm the word — e.g. \"Oh, "
+        "{english}? Sure.\" — then recast their whole sentence in natural "
+        "English and answer in character.",
+        "Reply in character, naturally recasting their full sentence in "
+        "English so they hear \"{english}\" in place of the Chinese, then "
+        "carry {scene} forward.",
+    ),
+    "full_sentence_cn": (
+        "They are stuck. Step out briefly: give the full English sentence — "
+        "\"{english}\" — invite them to try saying it themselves, then wait. "
+        "Do not move {scene} forward until they have tried.",
+        "Briefly out of character: tell them they could say \"{english}\", "
+        "ask them to give it a go themselves, and wait for their attempt "
+        "before continuing {scene}.",
+    ),
+    "explicit_ask": (
+        "Answer directly: give them \"{english}\" with one example that fits "
+        "{scene}, like \"{example}\", encourage them to use it right now, "
+        "then return to the scene.",
+        "Tell them the phrase is \"{english}\" — offer the example "
+        "\"{example}\", invite them to try it in their next sentence, and "
+        "pick {scene} back up.",
+    ),
+}
+
+# 连续求助控频指令（help.py 窗口内第 N 次起改发）：仍给词，但鼓励先自己试，
+# 防 A4 的「查词典模式」拖死对话。
+HELP_OVERUSE_DIRECTIVE = (
+    "Give them \"{english}\" in one short sentence, then warmly encourage "
+    "them to try a full English sentence on their own before asking for the "
+    "next word, and continue {scene}."
+)

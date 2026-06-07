@@ -33,13 +33,17 @@ LIVE_CONFIG = {
 }
 
 
-def _live_config(turn_mode: str, system_instruction: str | None = None) -> dict:
+def _live_config(
+    turn_mode: str, system_instruction: str | None = None, tools: list | None = None,
+) -> dict:
     """按轮次模式生成连接配置（深拷贝，防 SDK 原地改动模块常量，review W1）。
 
     natural：Live 内建 VAD 自动断轮次。
     ptt：关掉内建 VAD——轮次边界完全由显式 activity_start / activity_end 决定
     （bridge 上行泵接线：首帧补 start、turn_end 控制发 end）。
     system_instruction：persona（方式 A 中立考官 / P5 情景角色）；None 不注入。
+    tools：function calling 声明列表（情景 language_help，scenario_cases）；
+    None / 空不注入——方式 A 考官无 tools，保持中立零破壁。
     """
     config = copy.deepcopy(LIVE_CONFIG)
     if turn_mode == "ptt":
@@ -50,6 +54,8 @@ def _live_config(turn_mode: str, system_instruction: str | None = None) -> dict:
         # 必须是 Content 形状：裸字符串会原样进 setup JSON，服务端 1007 invalid
         # argument 拒连（真冒烟实锤；SDK pydantic 两种都收但只有这种序列化正确）
         config["system_instruction"] = {"parts": [{"text": system_instruction}]}
+    if tools:
+        config["tools"] = copy.deepcopy(tools)   # 同防原地改动模块常量
     return config
 
 
@@ -86,17 +92,25 @@ def _client() -> genai.Client:
     return _live_client
 
 
-def _connect_once(turn_mode: str = "natural", system_instruction: str | None = None):
+def _connect_once(
+    turn_mode: str = "natural",
+    system_instruction: str | None = None,
+    tools: list | None = None,
+):
     """返回 SDK 的 Live 连接 context manager（单次尝试，供 connect_live 重试包装）。"""
     _apply_ws_proxy_env()
     return _client().aio.live.connect(
         model=settings.live_model,
-        config=_live_config(turn_mode, system_instruction),
+        config=_live_config(turn_mode, system_instruction, tools),
     )
 
 
 @asynccontextmanager
-async def connect_live(turn_mode: str = "natural", system_instruction: str | None = None):
+async def connect_live(
+    turn_mode: str = "natural",
+    system_instruction: str | None = None,
+    tools: list | None = None,
+):
     """一条 Live 连接（`async with connect_live() as session:`），建链瞬态失败重试一次。
 
     联调实测偶发 TLS start_tls 被重置（ConnectionResetError ⊂ OSError），重连即通。
@@ -107,11 +121,11 @@ async def connect_live(turn_mode: str = "natural", system_instruction: str | Non
     async with AsyncExitStack() as stack:
         try:
             session = await stack.enter_async_context(
-                _connect_once(turn_mode, system_instruction)
+                _connect_once(turn_mode, system_instruction, tools)
             )
         except OSError as e:
             logger.warning("Live 建链瞬态网络错，重试一次：%r", e)
             session = await stack.enter_async_context(
-                _connect_once(turn_mode, system_instruction)
+                _connect_once(turn_mode, system_instruction, tools)
             )
         yield session

@@ -22,7 +22,7 @@ from app.config import settings
 from app.db import get_connection
 from app.live.client import AUDIO_MIME
 from app.main import app
-from app.scenario_cases import CASES as SCENARIO_CASES
+from app.scenario_cases import CASES as SCENARIO_CASES, language_help_tool
 
 
 def _sc(**overrides):
@@ -60,11 +60,15 @@ class FakeLiveSession:
     def __init__(self, responses):
         self.sent: list = []
         self.directions: list = []
+        self.tool_responses: list = []     # send_tool_response 回包（function calling）
         self._responses = responses
         self._first = True
 
     async def send_client_content(self, *, turns, turn_complete=True):
         self.directions.append(turns)      # 导演提示（方式 A）
+
+    async def send_tool_response(self, *, function_responses):
+        self.tool_responses.extend(function_responses)
 
     async def send_realtime_input(self, *, audio=None, activity_start=None, activity_end=None):
         self.sent.append(audio if audio is not None else (activity_start or activity_end))
@@ -105,9 +109,10 @@ def no_finalize(monkeypatch):
 
 def _patch_session(monkeypatch, session) -> None:
     @asynccontextmanager
-    async def fake_connect(turn_mode="natural", system_instruction=None):
+    async def fake_connect(turn_mode="natural", system_instruction=None, tools=None):
         session.turn_mode = turn_mode  # 记录穿透到连接层的轮次模式
         session.system_instruction = system_instruction  # persona（方式 A 考官）
+        session.tools = tools          # function calling 声明（情景 language_help）
         yield session
 
     monkeypatch.setattr("app.api.live_ws.connect_live", fake_connect)
@@ -162,6 +167,7 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
     # 方式 A 注入中立考官 persona + 导演开场提示已发给 Live
     assert session.system_instruction is not None and "examiner" in session.system_instruction
     assert len(session.directions) == 1
+    assert session.tools is None         # 考官无 tools：中立零破壁
 
 
 @pytest.mark.parametrize("case", ["ordering", "meeting"])
@@ -185,6 +191,51 @@ def test_session_started_creates_scenario_row(client, monkeypatch, case):
     assert len(session.directions) == 1
     opener_text = session.directions[0].parts[0].text
     assert opener_text in SCENARIO_CASES[case].openers
+    # 情景声明 language_help tool（function calling 教练通道，按 case 注入场景标签）
+    assert session.tools == [language_help_tool(case)]
+    assert SCENARIO_CASES[case].scene_label in str(session.tools)
+
+
+def test_scenario_tool_call_answered_and_teaching_event(client, monkeypatch):
+    """全链 tool_call 流：模型调 language_help → 应答台回 directive 给 Live +
+    teaching 事件直发前端。"""
+    tool_call = SimpleNamespace(
+        function_calls=[
+            SimpleNamespace(
+                id="fc-1",
+                name="language_help",
+                args={
+                    "kind": "mixed_cn",
+                    "chinese": "意大利面",
+                    "english": "spaghetti",
+                    "example": "Could I get the spaghetti, please?",
+                },
+            )
+        ]
+    )
+    session = FakeLiveSession(
+        responses=[SimpleNamespace(data=None, server_content=None, tool_call=tool_call)]
+    )
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        event = ws.receive_json()        # 应答台 teaching 事件（结构化求助卡片）
+        assert event == {
+            "type": "teaching",
+            "case": "ordering",
+            "kind": "mixed_cn",
+            "chinese": "意大利面",
+            "english": "spaghetti",
+            "example": "Could I get the spaghetti, please?",
+        }
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    # tool 响应已回给 Live：directive 含模型传来的翻译（模板槽位已填）
+    assert len(session.tool_responses) == 1
+    fr = session.tool_responses[0]
+    assert fr.id == "fc-1" and fr.name == "language_help"
+    assert "spaghetti" in fr.response["directive"]
 
 
 def test_scenario_opener_randomly_picked_from_registry(client, monkeypatch):

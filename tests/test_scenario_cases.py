@@ -10,6 +10,9 @@ from app.judge.prompt import build_judge_prompt
 from app.scenario_cases import (
     _SHARED_RULES,
     CASES,
+    GRAMMAR_AFTER_HELP_DIRECTIVE,
+    GRAMMAR_SILENT_DIRECTIVE,
+    GRAMMAR_SPEAK_DIRECTIVES,
     HELP_DIRECTIVES,
     HELP_OVERUSE_DIRECTIVE,
     NUDGE_DIRECTIVES,
@@ -119,25 +122,38 @@ def test_cases_are_distinct_roles():
 
 
 def test_language_help_tool_contract():
-    """tool 声明契约：名称 / 必填参数 / kind 枚举与指令模板库一一对应；
-    按 case 生成时 {scene} 槽已填该 case 的场景标签。"""
+    """情景教练 tool 契约（双声明）：language_help（求助）+ grammar_note（纠错检出）；
+    名称 / 必填参数 / kind 枚举与指令模板库一一对应；{scene} 槽已填场景标签。"""
     for case in CASES:
         tool = language_help_tool(case)
+        label = CASES[case].scene_label
         decls = tool["function_declarations"]
-        assert len(decls) == 1, case
-        decl = decls[0]
-        assert decl["name"] == "language_help", case
-        params = decl["parameters"]
+        assert [d["name"] for d in decls] == ["language_help", "grammar_note"], case
+        help_decl, grammar_decl = decls
+        # —— language_help —— #
+        params = help_decl["parameters"]
         assert set(params["required"]) == {"kind", "chinese", "english", "example"}
         # kind 枚举 = 模板库的键：模型传什么 kind，应答台就查得到什么模板
         assert set(params["properties"]["kind"]["enum"]) == set(HELP_DIRECTIVES)
         # 模型自带翻译进来（分工反转的核心约定）
-        assert "Translate it yourself" in decl["description"], case
-        # case 注入：场景标签进描述（选词/例句锚定当前场景），无残留槽
-        label = CASES[case].scene_label
-        assert label in decl["description"], case
+        assert "Translate it yourself" in help_decl["description"], case
+        # case 注入：场景标签进描述（选词/例句锚定当前场景）
+        assert label in help_decl["description"], case
         assert label in params["properties"]["english"]["description"], case
         assert label in params["properties"]["example"]["description"], case
+        # —— grammar_note：出现即报（用户决策），口语省略豁免、每轮至多一条 —— #
+        gparams = grammar_decl["parameters"]
+        assert set(gparams["required"]) == {"original", "fixed", "note"}
+        # 对照式纠正的参数约束：original 逐字且短、fixed 同片段最小修正
+        assert "verbatim" in gparams["properties"]["original"]["description"]
+        assert "keep it short" in gparams["properties"]["original"]["description"]
+        assert "minimal change" in gparams["properties"]["fixed"]["description"]
+        assert "casual spoken shortcuts" in grammar_decl["description"], case
+        assert "ONE error per turn" in grammar_decl["description"], case
+        # 整句中文轮不调（中文句没有英语语法可纠）
+        assert "Never call it for a sentence spoken in Chinese" in grammar_decl["description"]
+        assert label in grammar_decl["description"], case
+        # 全 tool 无残留槽
         assert "{scene}" not in str(tool), case
     # 两 case 的声明确实不同（场景标签注入生效）
     assert language_help_tool("ordering") != language_help_tool("meeting")
@@ -179,6 +195,35 @@ def test_help_directives_contract():
     )
 
 
+def test_grammar_directives_contract():
+    """口头纠错指令三态契约（B1 + 用户决策的顺序/对照/控频规则）：
+    说=回答最前对照纠正（say {fixed}, not {original}）、与中文同轮=放中文之后、
+    静默=只入卡片不开口。"""
+    # 说（单独）：≥2 变体轮换；对照式——正确形式在前、错误在后
+    assert len(GRAMMAR_SPEAK_DIRECTIVES) >= 2
+    for d in GRAMMAR_SPEAK_DIRECTIVES:
+        assert "{fixed}" in d and "{original}" in d
+        assert d.index("{fixed}") < d.index("{original}")   # say X, not Y 顺序
+    assert "Before answering in character" in GRAMMAR_SPEAK_DIRECTIVES[0]
+    # 说（与中文求助同轮）：中文应答之后，同样对照
+    assert "Chinese language help first" in GRAMMAR_AFTER_HELP_DIRECTIVE
+    assert "{fixed}" in GRAMMAR_AFTER_HELP_DIRECTIVE
+    assert "{original}" in GRAMMAR_AFTER_HELP_DIRECTIVE
+    # 静默：控频压掉 / recast 已覆盖时不开口
+    assert "Do not mention this error" in GRAMMAR_SILENT_DIRECTIVE
+    assert "{fixed}" not in GRAMMAR_SILENT_DIRECTIVE
+    # 槽位只用 {fixed}/{original}/{scene}
+    for d in (
+        *GRAMMAR_SPEAK_DIRECTIVES,
+        GRAMMAR_AFTER_HELP_DIRECTIVE,
+        GRAMMAR_SILENT_DIRECTIVE,
+    ):
+        residue = (
+            d.replace("{fixed}", "").replace("{original}", "").replace("{scene}", "")
+        )
+        assert "{" not in residue
+
+
 def test_nudge_directives_contract():
     """D1 分级探询模板契约：三级渐进、方括号舞台指令形态、暂停互斥内置、
     槽位只用 {scene}（SCENARIO_CASE.md D1 + C5）。"""
@@ -195,13 +240,17 @@ def test_nudge_directives_contract():
     assert "continue" in NUDGE_DIRECTIVES[3]
 
 
-def test_personas_wired_to_language_help_tool():
-    # persona 指挥模型调 tool 并照 directive 行事；persona 默认条款保留为兜底
+def test_personas_wired_to_coach_tools():
+    # persona 指挥模型调双 tool 并照 directive 行事；persona 默认条款保留为兜底
     for name, case in CASES.items():
         p = " ".join(case.persona.split())
         assert "language_help" in p, name
+        assert "grammar_note" in p, name
+        # 纠错规则进 persona：出现即调（口语省略豁免）、每轮至多一条
+        assert "grammar or word-choice mistake" in p, name
+        assert "at most one per turn" in p, name
         assert "follow the directive" in p, name
-        assert "If the function is unavailable" in p, name
+        assert "If the functions are unavailable" in p, name
 
 
 def test_judge_focus_lookup():

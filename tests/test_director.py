@@ -530,21 +530,101 @@ def test_p3_fallback_forces_done(monkeypatch):
     d.cancel_timers()
 
 
-def test_cancel_timers_kills_prep_and_fallback():
+def test_cancel_timers_kills_prep_fallback_and_monologue():
     d, ws, sess = _new()
 
     async def run():
         await _to_p2_prep(d, ws, sess)               # p2_prep：prep_task 活
         prep = d._prep_task
-        await d.on_ready(ws, sess)                    # p2_talk：fallback 活
+        await d.on_ready(ws, sess)                    # p2_talk：fallback + 独白计时器活
         fb = d._fallback_task
+        mono = d._monologue_task
         assert prep is not None and fb is not None and not fb.done()
+        assert mono is not None and not mono.done()
         d.cancel_timers()
         await asyncio.sleep(0)
-        assert prep.cancelled() and fb.cancelled()
+        assert prep.cancelled() and fb.cancelled() and mono.cancelled()
         assert d._prep_task is None and d._fallback_task is None
+        assert d._monologue_task is None
 
     asyncio.run(run())
+
+
+# —— P2 独白 2 分钟上限（IELTS_CASE §2 上限层，D1）—— #
+
+
+async def _to_p2_talk_invited(d, ws, sess):
+    """跑到 p2_talk 且邀请轮已说完（独白计时器锚定保持）。"""
+    await _to_p2_prep(d, ws, sess)
+    await d.on_ready(ws, sess)                        # → p2_talk，独白计时器武装
+    await _spoken_turn(d, ws, sess, "Please begin your long turn now.")   # 邀请轮
+
+
+def test_monologue_cap_injects_cut_prompt(monkeypatch):
+    # 独白满上限考官仍未收口 → 注入切断指令（礼貌 Thank you + 追问），不转场
+    monkeypatch.setattr(director_module, "MAX_MONOLOGUE_S", 0.02)
+    d, ws, sess = _new(yielding=True)
+
+    async def run():
+        await _to_p2_talk_invited(d, ws, sess)
+        assert d._monologue_task is not None and d._p2_invite_seen is True
+        sess.directions.clear()
+        await asyncio.sleep(0.06)                     # 上限到点
+        assert any("Politely cut in" in t for t in sess.directions)
+        assert d.state == "p2_talk"                   # 只注入不转场
+        assert d._monologue_task.done()               # 任务自然完结（review S1）
+
+    asyncio.run(run())
+    d.cancel_timers()
+
+
+def test_monologue_cap_disarmed_when_examiner_retakes_floor(monkeypatch):
+    # 考官在邀请轮之后再次发声（软探询/追问）= 独白自然结束 → 计时器撤销，不再切断
+    monkeypatch.setattr(director_module, "MAX_MONOLOGUE_S", 0.02)
+    d, ws, sess = _new()
+
+    async def run():
+        await _to_p2_talk_invited(d, ws, sess)
+        await _spoken_turn(d, ws, sess, "Why did you choose this skill?")   # 追问轮
+        assert d._monologue_task is None              # 已撤销
+        sess.directions.clear()
+        await asyncio.sleep(0.06)
+        assert sess.directions == []                  # 上限不再触发
+
+    asyncio.run(run())
+    d.cancel_timers()
+
+
+def test_monologue_cap_cancelled_on_part_exit():
+    # 宣告轮转出 p2_talk 后独白计时器不残留（同轮再发声撤销 + _set_state 离场双保险）
+    d, ws, sess = _new()
+
+    async def run():
+        await _to_p2_talk_invited(d, ws, sess)
+        assert d._monologue_task is not None
+        await _spoken_turn(
+            d, ws, sess,
+            "Thank you. We have been talking about this topic. "
+            "I would now like to discuss some more general questions related to it.",
+        )
+        assert d.state == "p3"
+        assert d._monologue_task is None
+
+    asyncio.run(run())
+    d.cancel_timers()
+
+
+def test_persona_pins_case_guardrails():
+    # IELTS_CASE §3/§4 越界守则 persona pin（M1/M2）：spec 给定话术与关键规则不回潮
+    # （折叠空白：persona 排版换行会把句子断在行中，子串按单行语义断言）
+    p = " ".join(director_module.EXAMINER_SYSTEM_INSTRUCTION.split())
+    assert "Could you say that in English?" in p          # §4 中文/求词（spec 逐字话术）
+    assert "anything else you would like to add" in p.lower()   # §2 软探询（裁决层）
+    assert "repeat it once" in p                          # §3 请求重复一次
+    assert "I can't give a score during the exam." in p   # §4 中途问分数
+    assert "the topic stays the same." in p               # §4 换题卡婉拒
+    assert "never fill the silence" in p                  # §3 停顿不救场
+    assert "one-word answer" in p                         # §3 弱答直接换题
 
 
 def test_prep_timer_path_sends_full_transition(monkeypatch):

@@ -157,13 +157,12 @@ SEED_SPECS: list[dict] = [
                     quick_fix="开口前套用 Could I... 模板",
                 ),
             ],
-            rewrites=[
-                Rewrite(
-                    original="Give me the menu",
-                    rewrite="Could I see the menu, please?",
-                    reason="疑问式 + please，餐厅点单的标准礼貌度",
-                ),
-            ],
+            rewrites=[],   # 情景不出改写示范（用户决策 2026-06-07）
+            summary=(
+                "全程独立完成点单、没有冷场，交流意愿很好。主要问题是祈使句点单"
+                "（Give me...）显得生硬，礼貌缓和语（please / could）缺失最高频。"
+                "下次开口前先套 Could I have... / I'd like... 句式，把礼貌表达练成开口本能。"
+            ),
         ),
     },
     {
@@ -310,13 +309,13 @@ SEED_SPECS: list[dict] = [
                     quick_fix="开口第一句固定为 The short version is...",
                 ),
             ],
-            rewrites=[
-                Rewrite(
-                    original="There are some problems but we did a lot of things",
-                    rewrite="We're on track overall — two blockers remain, both owned and dated",
-                    reason="状态 + 量化 + 责任人，会议汇报三要素",
-                ),
-            ],
+            rewrites=[],   # 情景不出改写示范（用户决策 2026-06-07）
+            summary=(
+                "进度汇报信息完整，还出现了主动自我更正（we finish → we have finished），"
+                "语法意识在上线。最大短板是结论后置——听者要等 30 秒才知道项目状态，"
+                "模糊量词（some / a lot）也削弱说服力。下次第一句固定 The short version is...，"
+                "先给结论再展开细节。"
+            ),
         ),
     },
     {

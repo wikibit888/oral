@@ -45,6 +45,17 @@ def test_scenario_prompt_no_band_no_descriptor():
     assert "不计入错误" in p
 
 
+def test_scenario_prompt_no_rewrites_with_summary():
+    """情景报告结构（用户决策 2026-06-07）：rewrites 留空 + 末尾 summary 总结。"""
+    p = build_judge_prompt("scenario", transcript_text=TRANSCRIPT, signals=SIGNALS, scenario_case="ordering")
+    assert "rewrites 留空列表" in p
+    assert "先肯定" in p and "提升方向" in p     # summary 三要素：鼓励→问题→方向
+    # 雅思侧：rewrites 仅雅思产出、summary 留 null
+    ielts = build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="exam")
+    assert "仅雅思产出" in ielts
+    assert "雅思留 null" in ielts
+
+
 def test_scenario_prompt_uses_case_prompt_when_given():
     p = build_judge_prompt(
         "scenario", transcript_text=TRANSCRIPT, signals=SIGNALS,

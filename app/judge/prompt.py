@@ -34,7 +34,7 @@ LANGUAGE_RULES = """\
 3. suggestions / quick_fix / syntactic_analysis.suggestion：中文解释为主，
    嵌入英文示例短语（如「试用 Could I have... 句式」）。
 4. 其余解释说明字段（explanation / reason / desc / observation /
-   descriptor_match / title / pattern）：一律用中文，可嵌英文原话片段。
+   descriptor_match / title / pattern / summary）：一律用中文，可嵌英文原话片段。
 5. category / severity 等枚举字段按 schema 英文取值，不翻译。\
 """
 
@@ -46,14 +46,22 @@ DIAGNOSTIC_INSTRUCTIONS = """\
 - fossilized_errors：反复犯的硬错，occurrences 列逐字原话。
 - self_corrections：自我更正的正向例子（initial → corrected，逐字）。
 - top_priorities：3–5 条最关键问题，每条 title + severity(high/medium/low) + explanation + examples(逐字) + quick_fix。
-- rewrites：挑 2–3 段考生说过的不够好的话，并排给出 {original(逐字), rewrite, reason}。\
+- rewrites：挑 2–3 段考生说过的不够好的话，并排给出 {original(逐字), rewrite, reason}。
+  **仅雅思产出；情景对话留空列表。**
+- summary：**仅情景对话产出（雅思留 null）**，要求见情景模式段。\
 """
 
 SCENARIO_INSTRUCTIONS = """\
 模式：情景对话。**不出 band、不出 overall_band**（band 是雅思 rubric 产物，套到情景会错配）。
 dimensions 与 overall_band 必须为 null；只产出诊断层 + 共享的客观流利度指标。
 情景对话允许用户夹中文向 AI 求助（教练协议）：transcript 中的非英语片段及其
-乱码（ASR 按英文强制转写中文的产物）不计入错误、不作为证据引用。\
+乱码（ASR 按英文强制转写中文的产物）不计入错误、不作为证据引用。
+
+情景报告结构（与雅思的差异，用户决策 2026-06-07）：
+- rewrites 留空列表——情景不出改写示范（会话内 grammar_note 已即时纠正）。
+- summary：报告末尾总结，一段简短中文（2–4 句，可嵌英文示例）：先肯定本次
+  做得好的地方（鼓励），再点出最主要的问题（含高频错误），最后给一个明确的
+  提升方向。语言简洁，不说客套话。\
 """
 
 # 方式 B 各 Part 的诊断侧重（IELTS.md §3：分模块练习，按 Part 特性给针对性反馈）

@@ -31,9 +31,10 @@ from app.live.director import (
     IeltsDirector,
     send_stage_direction,
 )
+from app.live.help import LanguageHelpDesk
 from app.live.tee import UserAudioTee
 from app.pipeline import finalize_session
-from app.scenario_cases import CASES as SCENARIO_CASES
+from app.scenario_cases import CASES as SCENARIO_CASES, language_help_tool
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +95,19 @@ async def live_ws(websocket: WebSocket) -> None:
     tee: UserAudioTee | None = None
     director: IeltsDirector | None = None
     ended = False
-    # 方式 A：中立考官 persona + 导演状态机（cue card 随机抽自题库 p2）；
-    # 情景：按 case 注入角色 persona（_parse_params 已保证 case 在注册表内）
+    # 方式 A：中立考官 persona + 导演状态机（cue card 随机抽自题库 p2），
+    # 无 tools 保持中立；情景：按 case 注入角色 persona + language_help tool
+    # （声明按 case 生成——场景标签锚定模型选词；_parse_params 已保证 case 在注册表内）
+    tools = None
     if sub_mode == "exam":
         system_instruction = EXAMINER_SYSTEM_INSTRUCTION
     elif mode == "scenario":
         system_instruction = SCENARIO_CASES[scenario_case].persona
+        tools = [language_help_tool(scenario_case)]
     else:
         system_instruction = None
     try:
-        async with connect_live(turn_mode, system_instruction) as live_session:
+        async with connect_live(turn_mode, system_instruction, tools) as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的
             # 会话不触发 judge（契约：仅 end_session 触发）：说过话的停在
             # recording 态留素材，零切片的在 finally 里清掉。
@@ -143,6 +147,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 tee.finish()
                 _schedule_finalize(tee, session_id)
 
+            tool_handler = None
             if sub_mode == "exam":
                 director = IeltsDirector(_pick_cue_card())
                 await director.start(websocket, live_session)
@@ -151,6 +156,9 @@ async def live_ws(websocket: WebSocket) -> None:
                 # 随机抽一条开场舞台指令，角色入戏开场并以一个引导性问题
                 # 把用户带进场景。对评测零污染——文本回合不进 tee/转写样本。
                 await send_stage_direction(live_session, _pick_opener(scenario_case))
+                # language_help 应答台：模板控形 + 控频 + teaching 事件直发前端
+                # （case 感知：{scene} 槽 + 事件 case 字段）
+                tool_handler = LanguageHelpDesk(websocket, scenario_case)
 
             await bridge(
                 websocket,
@@ -159,6 +167,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 tee=tee,
                 on_end_session=_on_end_session,
                 director=director,
+                tool_handler=tool_handler,
             )
     except WebSocketDisconnect:
         pass  # 客户端正常断开

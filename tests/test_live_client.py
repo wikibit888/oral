@@ -17,7 +17,7 @@ def _connect_factory(fail_times: int, exc: Exception, attempts: list):
     """返回 _connect_once 替身：前 fail_times 次 __aenter__ 抛 exc，之后成功。"""
 
     @asynccontextmanager
-    async def fake_connect_once(turn_mode="natural", system_instruction=None):
+    async def fake_connect_once(turn_mode="natural", system_instruction=None, tools=None):
         attempts.append(turn_mode)
         if len(attempts) <= fail_times:
             raise exc
@@ -87,7 +87,7 @@ def test_midsession_oserror_not_retried(monkeypatch):
     attempts: list = []
 
     @asynccontextmanager
-    async def fake_connect_once(turn_mode="natural", system_instruction=None):
+    async def fake_connect_once(turn_mode="natural", system_instruction=None, tools=None):
         attempts.append(turn_mode)
         yield "session"
 

@@ -6,7 +6,9 @@
 - 后端 → 浏览器：binary = 24k PCM16 音频帧；text = JSON 事件
   transcript_delta {role: user|examiner, text} / interrupted（barge-in，
   前端立即清空 24k 播放队列）/ turn_complete（考官回合结束）/
-  latency_ms {value}（考官首帧时的响应延迟，app/live/latency.py）。
+  latency_ms {value}（考官首帧时的响应延迟，app/live/latency.py）/
+  teaching {kind, chinese, english, example}（情景 language_help 求助卡片，
+  由应答台直发，app/live/help.py）。
 
 轮次边界按连接时确定的 turn 模式（SCHEMA §6.1）：
 - natural：Live 内建 VAD 自动断轮次；turn_end 控制记日志忽略。
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 async def bridge(
     websocket, session, *, turn_mode="natural", tee=None, on_end_session=None,
-    director=None,
+    director=None, tool_handler=None,
 ) -> None:
     """并发跑上行 / 下行两个泵，任一结束就取消另一个；泵内异常向上抛。
 
@@ -45,6 +47,9 @@ async def bridge(
     是「会话正常收束」的唯一信号（客户端断开 / Live 流自行结束都不会触发）。
     调用方用它收尾 tee 并调度课后 judge——前端发完 end_session 可能立即断开并
     跳报告页，本协程随时会被取消，收束后的代码不保证执行，故不能放在 bridge 之后。
+    tool_handler：function calling 应答台（app/live/help.py，鸭子类型，仅情景）。
+    下行泵收到 tool_call 即 await `on_tool_call(name, args)` 并把返回体经
+    send_tool_response 回给模型——应答必须纯本地瞬时（模型在等响应期间是哑的）。
     """
     # 延迟徽章（latency_ms 事件）：两泵共享一个测量器——上行采用户停说点，
     # 下行在考官首帧出数（FRONTEND §5）
@@ -52,7 +57,9 @@ async def bridge(
     up = asyncio.create_task(
         _pump_upstream(websocket, session, turn_mode, tee, on_end_session, meter, director)
     )
-    down = asyncio.create_task(_pump_downstream(websocket, session, tee, meter, director))
+    down = asyncio.create_task(
+        _pump_downstream(websocket, session, tee, meter, director, tool_handler)
+    )
     try:
         done, _ = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
     finally:
@@ -138,7 +145,9 @@ def _parse_control(text: str) -> str | None:
     return None
 
 
-async def _pump_downstream(websocket, session, tee=None, meter=None, director=None) -> None:
+async def _pump_downstream(
+    websocket, session, tee=None, meter=None, director=None, tool_handler=None,
+) -> None:
     """Live → 浏览器：音频字节直发 binary；双向转写发 transcript_delta 事件。
 
     session.receive() 的迭代器在一轮结束后耗尽，外层 while True 续接下一轮
@@ -149,6 +158,32 @@ async def _pump_downstream(websocket, session, tee=None, meter=None, director=No
     # 上行泵可能已处理新帧，边界就漂了。
     while True:
         async for response in session.receive():
+            # function calling：模型中途发起 tool 调用（getattr 兼容鸭子类型
+            # 假体）。逐个应答后一次性回包——模型在等响应期间是哑的，handler
+            # 必须纯本地瞬时（help.py 契约）。无 handler 却收到调用（不该发生：
+            # tools 只随 handler 一起接线）记日志忽略，不让会话崩。
+            tc = getattr(response, "tool_call", None)
+            if tc is not None:
+                if tool_handler is None:
+                    logger.warning("live WS 收到 tool_call 但无应答台，忽略")
+                else:
+                    responses = [
+                        types.FunctionResponse(
+                            id=fc.id,
+                            name=fc.name,
+                            response=await tool_handler.on_tool_call(
+                                fc.name, dict(fc.args or {})
+                            ),
+                        )
+                        for fc in (tc.function_calls or [])
+                    ]
+                    if responses:
+                        await session.send_tool_response(function_responses=responses)
+                    else:
+                        # 空 tool_call 批（function_calls 为 None/[]）：协议上不该
+                        # 出现；不回包（语义未知），记 warning 留排查线索——若实测
+                        # 出现挂死再升级处理（review W1）
+                        logger.warning("live WS 收到空 tool_call 批，未回包")
             if response.data:
                 if tee is not None:
                     tee.on_model_audio()    # 考官开口 = 用户切片的轮次边界

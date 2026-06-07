@@ -53,6 +53,7 @@
 - [ ] 接入 Live 会话页（复用 P2 代理；无状态机；手动 End + persona 自然收尾；Live 挂直接报错）
 - [x] 点餐 persona prompt + judge prompt——2026-06-07 PR #21：`app/scenario_cases.py` case 注册表（persona + judge_focus，加 case 只改注册表；白名单推导 + finalize 回填 case_prompt）；真冒烟守角色 + 自然收尾、judge 命中点餐侧重且零 band 泄漏
 - [x] 会议 persona prompt + judge prompt——随 PR #21：meeting persona 礼貌质疑追问 blocker、收尾确认行动项，真冒烟过
+- [x] persona 教练协议（场景段 + 共享规则段重构，`docs/SCENARIO_CASE.md` A/B/C 类边际落地）——2026-06-07 PR #27：夹中文 recast / 整句中文等复述 / 显式求助（中英文问法同协议）给词 + 场景例句 / 控制指令即时响应（慢/重复/换说法/解释回位/难度保持/口头暂停重开/无关问题带回）；judge 防失真两行（中文求助乱码转写不计错误）；237 测绿 + review PASS + 真 Live 冒烟过
 - [ ] case 选择页（验证 + review）
 
 ### P6 报告 + 进步 UI（~4h）
@@ -131,3 +132,4 @@
 2026-06-07 — **方式 A live 转场 edge case 修复**（PR #26）：导演状态机重做为模型驱动（考官自说宣告句 + 短语检测种 _pending + 延迟到 turn_complete 兑现 + 分层安全网），其上修四项实测问题——①开场防吞（建链即门控麦克风防积压帧 barge-in + 10s 开场看门狗重发）②备题倒计时延迟到念题轮说完才起跳（45s 兜底 + 抢按 ready 缓行）③P2→P3 短语拓宽（we've been talking about / part 3 等）配状态门防 P1 误跳 ④done 停输入 + 前端播完收尾语音自动收束跳报告（Live.jsx 随前端轨不入 PR）。pytest 234 绿（+9）+ review 两轮（NEEDS-FIX 3 项：开场轮检测门控/裸锚撞追问/前端 fail 误导航，修复后 PASS）+ 用户真链路实测通过；连带勾 P9 两项（done 不发 / p2_talk 上限计时器）/ 无阻塞 / 下次：P9 余下 🔴 两项（pyaudio 移依赖 / _pick_cue_card 空库防护）
 
 
+2026-06-07 — **P5 persona 教练协议完成**（PR #27）：persona 拆场景差异段 + 共享规则段（`_persona` 合成，「加 case 只写场景段」强化）；落地 `docs/SCENARIO_CASE.md` 12 条边际中 11 条的 prompt 侧（删原「politely check what they mean」反向行为；D1 沉默留 PR-2 客户端计时器 + nudge）；judge SCENARIO_INSTRUCTIONS 加中文求助乱码防失真。pytest 237 绿（+4）+ review PASS（2 条 prompt 张力建议——守角色 vs 破壁自相矛盾 / 一句话上限与 A3 打架——已修）+ 用户真 Live 冒烟通过。无阻塞。下次：PR-2 沉默 nudge（前端计时器 + stage 分级舞台指令）或 PR-3 language_help function calling（先冒烟 preview 模型 tool 支持）

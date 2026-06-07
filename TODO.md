@@ -76,6 +76,34 @@
 - [ ] 方式 A 长谈中段偶发上游 1008 abort 复查（PR #20 已知问题；方向：client_content 与实时音频交错 / 导演提示 turn_complete=False 试探；无导演长会话此前联调正常；done/005 数据点：~7 分钟全程会话未复现）
 - [ ] 真库 live 瞬态残留行清理（弃局/StrictMode 累积 17 行；done/007 反馈②；物理删除真数据，方案留用户拍板）
 
+### P9 巡检修复批次（2026-06-07 P0–P6 后端全量巡检，7 子 agent 并行审计产出；按严重级排序，逐项小 PR）
+
+**🔴 demo 前应修**
+- [ ] `pyaudio` 移出主依赖（仅 `gemini_live.py` 用；无 portaudio 的机器 `uv sync` 直接构建失败）——`pyproject.toml:12`，移 dev/optional 组 + 文档注明
+- [ ] 方式 A「模型抢戏」done 不发（done/005 🔴）：persona 加「禁止自行宣布考试结束」规则 + closing 对策（轮数对齐/检测兜底）——`director.py:27–37,140`；修复后投 handoff 前端补验 done UI
+- [ ] `_pick_cue_card` 空题库 IndexError 防护 + 测试（题库损坏时方式 A 入口对用户不透明失败）——`live_ws.py:177`
+
+**🟡 功能隐患**
+- [ ] `speaking_time_s` 非负钳制（whisper 时间戳异常可写负值进报告）——`signals.py:86` 一行 `max(0.0, …)`
+- [ ] 方式 B 并发 ingest 加 whisper 串行锁（live tee 有 `_ingest_lock`、方式 B 没有，快速连传可并发调 transcribe）——`sessions.py:164`
+- [ ] pipeline 落库测试修正：现用 module_p2 mock 绕过剥 band 断言 band 落库（假阳性）；补 exam 真 band + module_p2 无 band 两用例——`test_pipeline.py:110`
+- [ ] p2_talk 长谈 2 分钟上限计时器（现全靠模型自觉，不接手则 FSM 卡死）——`director.py`
+- [ ] PTT 按住不松直接 End：`activity_open` 悬挂不发 `activity_end`（疑与 done/004 上游 1007 相关）+ 测试——`bridge.py:102`
+- [ ] director `_prep_task` 纳入强引用集合 + `_end_prep` 写已关 WS 加 suppress（竞态日志噪音）——`director.py:176,190`
+- [ ] Live session 并发写防护（导演 `send_client_content` 与上行 `send_realtime_input` 无锁交错，1008 根因候选）——随 P8 1008 复查一并处理（加锁或 turn_complete=False 探针）
+- [ ] `DELETE /sessions` 加状态门或测试钉死「任意状态可删」为设计决策（现 completed/processing 也能物理删除）——`sessions.py:142`
+- [ ] scenario 全空诊断标 `unscorable`（对齐方式 B 的 `_diagnostics_empty` 检查，防零反馈 completed 报告）——`run.py:217`
+- [ ] 方括号舞台指令下行过滤（模型违规读出时原文直达前端气泡，现纯 persona 软防线）——`bridge.py:174`
+- [ ] `GET /progress` series 加 `is_seed` 标注（seed 爬升点与真实点混排，用户会误认演示数据为自己进步；Library 有标注 Review 曲线没有）——`review.py` BandPoint/FluencyPoint + `crud.list_completed_reports`，连带 SCHEMA §6.4 + handoff 前端
+- [ ] `.env.example` 补 `APP_RELOAD`（live 联调必关）/ `JUDGE_MODEL`（503 绕行）/ `WHISPER_MODEL` 注释
+- [ ] `gemini_live.py` 与 config 对齐：硬编码代理回落 `127.0.0.1:7897` + 不读 `.env`（照 CLAUDE.md 步骤首跑即踩）——`gemini_live.py:33,64`
+
+**🔵 文档漂移 / 低优先**
+- [ ] SCHEMA §6.3 status 枚举过期（仍写 done/uploaded，实际 completed/live；两 agent 独立报告）——文档改对齐现实现
+- [ ] 契约注记打包：SCHEMA §6.2 `duration_s` 语义分叉（live 墙钟 vs B 录音累加）/ §5.1 漏 `reports.created_at` / SCENARIO.md §4 ask_help 标「已移拓展」/ FRONTEND §5 `examiner_speaking` 加「后端不发，前端音频帧近似」注
+- [ ] 小优化打包：`load_band_descriptors` 加 lru_cache（题库有它没有）/ TTS 末题后多睡 6.5s / db.py `_ensure_columns` 对新库是死代码（双真相源加注释）
+- [ ] H1 跟踪落地：`signals.py` 停顿计算源头加 TEST.md H1 注释（现仅 pipeline 两处有、源头无）；本条即主 TODO 跟踪锚点
+
 ### 拓展（最后优化，不在 24h 主线）
 - [ ] 雅思原题库：`ielts_questions` 表 + 录入/查询/删除接口；`GET /questions` 优先原题库、回退静态库（SCHEMA §7）
 - [ ] SSE 流式报告 `GET /reports/{id}/stream`（报告态逐段填充；未实现前轮询兜底）
@@ -99,5 +127,6 @@
 2026-06-07 — **P6 后端件 PR-A 完成**（PR #22，P6 两项标 [~] 余前端）：GET /sessions（Library 倒序 + overall_band/wpm 摘要分 LEFT JOIN + status/is_seed，契约加 status）+ GET /progress（band_series 仅方式 A 三重过滤 / fluency_series 全模式含 error_rate / latest_bands / gap=target−latest 正负语义）+ GET/PUT /settings（0–9 且 0.5 倍数，null 清除）；SCHEMA §6.2/§6.4 字段名锁定。pytest 201 绿（+18）+ 真冒烟（真 oral.db：51 行列表 / 11 band 点 + 18 流利度点 / gap 计算正确 / 422 生效）+ review PASS（2🟡 测试缺口已补）。handoff/inbox/007 F5 契约件已投递（注明 seed 脚本未做、真库暂无 is_seed 行）/ 无阻塞 / 下次：P6 seed 脚本或修方式 A done 不发（done/005 🔴 模型抢戏）
 2026-06-07 — **P6 seed 脚本完成并勾选**（PR #23）：`python -m app.seed` 7 条历史会话（A×3 band 5.5→6.0→6.5 真聚合 + B×2 + 情景×2；wpm/静默/填充/错误率/ttr 单调向好）；幂等重插 + --purge 只删 seed 行（真实行零波及测试钉死）；report_json 经 Report 模型同 schema、evidence 纯英文 ASR 转写体 + CJK 护栏。pytest 212 绿（+11）+ 真冒烟（seed→曲线爬升→purge 还原）+ review 首轮 NEEDS-FIX（🔴 evidence 引证违规×5）→修→复审 PASS。F5 前端随 007 回执 PASS 收官（Library+Review 两页真数据联调过，error_rate 加线已采纳）；007 反馈记两条新 TODO（live duration_s 漏落库 / 瞬态残留清理）；真库已播种 + handoff/inbox/008 验证件已投。下次：修 live duration_s 或方式 A done 不发（done/005 🔴）
 2026-06-07 — **live duration_s 回填完成并勾选**（PR #24，done/007 反馈①闭环）：session_started 后记单调钟起点，end_session 回调内墙钟差值回填 + 翻 processing 同瞬间；弃局不回填留 NULL；方式 B 互踩不可能（status 门 409）。pytest 213 绿（+1 用例 + 弃局 NULL 不变式断言）+ 真冒烟（真 Live 建链 sleep 2.2s→库里 2.20s 精确吻合）+ review PASS。存量旧 live 行仍 '—' 属预期（不回写历史）。下次：修方式 A done 不发（done/005 🔴 模型抢戏）或 P8 残留清理
+2026-06-07 — **P0–P6 后端全量巡检**（7 子 agent 并行，一人一 Priority，只读审计）：去重后产出 3🔴 + 12🟡 + 4🔵 打包项，新开 P9 巡检修复批次记录（每条带文件:行号与来源）。🔴：pyaudio 主依赖破坏 uv sync / 方式 A done 不发零修复 / _pick_cue_card 空库 IndexError。亮点确认干净：竞态关死、band 剥除三重防线、迁移原子性、注册表白名单、零 TODO/FIXME 残留。未动任何代码 / 无阻塞 / 下次：从 P9 🔴 三项开工（pyaudio 最小、done 不发价值最大）
 
 

@@ -170,6 +170,11 @@ async def _pump_downstream(websocket, session, tee=None, meter=None, director=No
                 )
             ot = sc.output_transcription
             if ot is not None and ot.text:
+                # 方式 A 导演：考官转写喂状态机做转场短语检测（模型驱动转场的主推力，
+                # app/live/director.py）。同步钩子、无 await——只累积 + 种 _pending，
+                # 真正转场延迟到 turn_complete。放在 send 之前：边界状态先于事件落定。
+                if director is not None:
+                    director.on_examiner_transcript(ot.text)
                 await websocket.send_json(
                     {"type": "transcript_delta", "role": "examiner", "text": ot.text}
                 )

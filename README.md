@@ -44,7 +44,7 @@
 
 ```bash
 uv sync                        # 安装依赖
-cp .env.example .env           # 填入 GEMINI_API_KEY（必须）、GEMINI_PROXY（可选）
+cp .env.example .env           # 填入 GEMINI_API_KEY（必须）、GEMINI_PROXY（必须）
 uv run python -m app.tts       # 预生成题目音频（一次性，雅思的recording模式需要）
 uv run python -m app.seed      # 预置 7 条演示历史会话（进步曲线开箱可见）
 APP_RELOAD=0 uv run python main.py          # 启动后端 :8000（热重载会掐断 live WS，务必关）
@@ -55,6 +55,8 @@ cd frontend && npm install && npm run dev   # 前端 dev server（/api 代理到
 uv run pytest                  # 后端测试
 cd frontend && npm test        # 前端测试
 ```
+> 这是一条补充，由于开发时候的疏忽，代码后端有一个严重的bug，就是必须配置proxy才能使用，本地开发由于直连gemini被限制，始终在proxy环境下进行，忽略了这个问题，也是最后才发现。
+
 ## 演示视频
 
 通过网盘分享的文件：题目一口语助手demo演示.mov

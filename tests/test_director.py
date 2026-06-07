@@ -81,11 +81,40 @@ def test_start_announces_p1_directs_opening_arms_fallback():
     asyncio.run(d.start(ws, sess))
     assert ws.events == [{"type": "part_change", "part": "p1"}]
     assert len(sess.directions) == 1 and "Part 1" in sess.directions[0]
+    # 实测 bug① pin：开场轮只 greet+自报姓名+问名——绝不能同轮带首个 P1 问
+    assert "full name" in sess.directions[0]
+    assert "stop and wait" in sess.directions[0]
+    assert "first everyday" not in sess.directions[0]
+    assert 'introduce yourself as "Puck"' in sess.directions[0]   # 默认考官名
     assert d.state == "p1"
     assert d.input_paused is True                    # 开场门控：积压帧/杂音全丢（反馈①）
     assert d._opening_task is not None               # 开场看门狗已武装
     assert d._fallback_task is not None              # P1 安全网已武装
     d.cancel_timers()
+
+
+def test_examiner_name_flows_into_opening_and_nudge(monkeypatch):
+    # 随机音色：考官名经构造参数注入开场指令与看门狗 nudge（与本场音色同源）
+    monkeypatch.setattr(director_module, "OPENING_NUDGE_S", 0.01)
+    d = IeltsDirector(CARD, examiner_name="Aoede")
+    ws, sess = FakeWs(), FakeSession()
+
+    async def run():
+        await d.start(ws, sess)
+        await asyncio.sleep(0.03)                     # 看门狗补发 ≥1 次
+        assert all('introduce yourself as "Aoede"' in t for t in sess.directions)
+
+    asyncio.run(run())
+    d.cancel_timers()
+
+
+def test_pick_examiner_voice_random_pool_and_pin(monkeypatch):
+    # LIVE_VOICE 空 = 注册表内随机；非空 = 固定（即使不在注册表也尊重自定义）
+    monkeypatch.setattr(director_module.settings, "live_voice", "")
+    for _ in range(8):
+        assert director_module.pick_examiner_voice() in director_module.EXAMINER_VOICES
+    monkeypatch.setattr(director_module.settings, "live_voice", "Aoede")
+    assert director_module.pick_examiner_voice() == "Aoede"
 
 
 def test_opening_gate_releases_after_first_spoken_turn():
@@ -137,12 +166,17 @@ def test_opening_watchdog_resends_when_silent(monkeypatch):
     async def run():
         await d.start(ws, sess)
         await asyncio.sleep(0.05)                     # 看门狗到点 ≥1 次
-        assert len(sess.directions) >= 2              # 开场指令被重发
-        assert all("Begin the exam" in t for t in sess.directions)
+        assert len(sess.directions) >= 2              # 开场指令被补发
+        assert "Begin the exam" in sess.directions[0]   # 首发 = 完整开场
+        # 补发 = 幂等 nudge（已问候则不再问候），防慢首包下二次问候
+        assert all(
+            "already greeted" in t and "full name" in t
+            for t in sess.directions[1:]
+        )
         d.on_model_audio()                            # 首帧考官音频到达
         sent = len(sess.directions)
         await asyncio.sleep(0.05)
-        assert len(sess.directions) == sent           # 听到声音后不再重发
+        assert len(sess.directions) == sent           # 听到声音后不再补发
 
     asyncio.run(run())
     d.cancel_timers()
@@ -570,7 +604,9 @@ def test_monologue_cap_injects_cut_prompt(monkeypatch):
         assert d._monologue_task is not None and d._p2_invite_seen is True
         sess.directions.clear()
         await asyncio.sleep(0.06)                     # 上限到点
-        assert any("Politely cut in" in t for t in sess.directions)
+        assert any("cut in" in t for t in sess.directions)
+        # 泄漏 pin：切断指令是纯动作、不含可念的时间断言（"spoken for ... minutes"）
+        assert not any("spoken for" in t for t in sess.directions)
         assert d.state == "p2_talk"                   # 只注入不转场
         assert d._monologue_task.done()               # 任务自然完结（review S1）
 
@@ -625,6 +661,10 @@ def test_persona_pins_case_guardrails():
     assert "the topic stays the same." in p               # §4 换题卡婉拒
     assert "never fill the silence" in p                  # §3 停顿不救场
     assert "one-word answer" in p                         # §3 弱答直接换题
+    # 实测 bug①② pin（prompt 质检批次）：
+    assert "ABSOLUTE OUTPUT RULE" in p                    # 禁读/禁转述/禁旁白升首条
+    assert "Can you tell me your full name, please?" in p   # 开场只问名（IELTS_CASE §3 核对身份）
+    assert "the system" not in p                          # 元叙述去 "the system"（泄漏素材清零）
 
 
 def test_prep_timer_path_sends_full_transition(monkeypatch):

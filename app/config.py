@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # 实时对话用的 Live 模型（WS 双向音频流：16k PCM 上行 / 24k PCM 下行）
     live_model: str = "gemini-3.1-flash-live-preview"
 
+    # Live 音色。空字符串（默认）= 方式 A 每场从 director.EXAMINER_VOICES 注册表
+    # 随机抽一个（考官自报姓名与音色一一对应、同源派生）；填音色名（如 LIVE_VOICE=
+    # Aoede）则固定用它——注意 pin 对两模式都生效（情景路径也固定为该音色）。
+    # 情景对话不参与随机：空 = 模型默认音色（Puck），不变。
+    live_voice: str = ""
+
     # 题库 TTS 预生成模型（python -m app.tts，离线一次性）
     tts_model: str = "gemini-2.5-flash-preview-tts"
 

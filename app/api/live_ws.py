@@ -153,7 +153,9 @@ async def live_ws(websocket: WebSocket) -> None:
                 # 不能让它看到契约外的过渡态卡住（联调发现①）
                 crud.update_session_status(session_id, "processing")
                 tee.finish()
-                _schedule_finalize(tee, session_id)
+                # tool_handler 闭包按名晚绑定：定义在下方、bridge 运行时已就位
+                # （方式 A 恒 None）。实录在 drain 后才导出，这里只传引用。
+                _schedule_finalize(tee, session_id, tool_handler)
 
             tool_handler = None
             nudger = None
@@ -219,22 +221,31 @@ def _pick_opener(case: str) -> str:
     return random.choice(SCENARIO_CASES[case].openers)
 
 
-def _schedule_finalize(tee: UserAudioTee, session_id: str) -> None:
+def _schedule_finalize(
+    tee: UserAudioTee, session_id: str, help_desk: LanguageHelpDesk | None = None
+) -> None:
     """调度课后收口为独立 task：先排干切片 ingest，再跑一次 judge。"""
-    _spawn_background(_drain_and_finalize(tee, session_id))
+    _spawn_background(_drain_and_finalize(tee, session_id, help_desk))
 
 
-async def _drain_and_finalize(tee: UserAudioTee, session_id: str) -> None:
+async def _drain_and_finalize(
+    tee: UserAudioTee, session_id: str, help_desk: LanguageHelpDesk | None = None
+) -> None:
     # 必须先等全部切片转写/预上传落库再 finalize——否则在途的末轮切片
     # transcript_json 还是 NULL，会被 list_processed_user_turns 漏掉。
     await tee.drain()
-    await asyncio.to_thread(_run_finalize, session_id)
+    # FC 反馈实录在 drain 之后导出（情景才有应答台；方式 A exam 分支不设
+    # tool_handler，恒 None）。已知边际（review W2）：下行泵若在 end_session
+    # 瞬间恰好还在处理最后一批 tool_call 即被取消，该条实录可能漏收——损失
+    # 上限一条、且该卡片用户本就没看到，demo 不为此引入泵间同步。
+    live_feedback = help_desk.live_feedback() if help_desk is not None else None
+    await asyncio.to_thread(_run_finalize, session_id, live_feedback)
 
 
-def _run_finalize(session_id: str) -> None:
+def _run_finalize(session_id: str, live_feedback=None) -> None:
     # finalize_session 自带 failed 状态机 + 异常日志；这里吞掉防 task 留未取异常
     with suppress(Exception):
-        finalize_session(session_id)
+        finalize_session(session_id, live_feedback=live_feedback)
 
 
 def _schedule_orphan_cleanup(session_id: str) -> None:

@@ -28,6 +28,37 @@ class Dimensions(BaseModel):
     pronunciation: Dimension
 
 
+# —— live FC 反馈实录（仅情景，系统确定性组装）—— #
+class LiveCorrection(BaseModel):
+    """会话内 grammar_note 一次纠错实录（original→fixed 对照 + note 错误类型）。"""
+
+    original: str
+    fixed: str
+    note: str
+    spoken: bool   # True=当场口头纠正过；False=控频压掉、仅卡片
+
+
+class LiveTeaching(BaseModel):
+    """会话内 language_help 一次中文求助实录（chinese→english + 场景例句）。"""
+
+    kind: str      # mixed_cn | full_sentence_cn | explicit_ask
+    chinese: str
+    english: str
+    example: str
+
+
+class LiveFeedback(BaseModel):
+    """情景会话内 FC 反馈实录（grammar_note / language_help），系统确定性组装。
+
+    不进 JudgeReport schema——数据本就结构化（tool 调用参数原样），让 LLM
+    转述只会引入漂移；judge 只把它当输入材料（prompt 注入），报告字段由
+    后端直接落。仅情景 live 会话非空：雅思无 tools、方式 B 无 Live。
+    """
+
+    corrections: list[LiveCorrection]
+    teachings: list[LiveTeaching]
+
+
 # —— 诊断层（所有模式共享）—— #
 class CommonPattern(BaseModel):
     pattern: str
@@ -116,3 +147,5 @@ class Report(BaseModel):
     unscorable: bool = False
     unscorable_reason: str | None = None
     diagnostics: Diagnostics
+    # 会话内 FC 反馈实录：仅情景 live 会话且有事件时非空（系统组装，非 LLM 产出）。
+    live_feedback: LiveFeedback | None = None

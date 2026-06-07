@@ -167,6 +167,64 @@ def test_broken_ws_does_not_break_tool_response():
     assert "spaghetti" in result["directive"]
 
 
+# —— 反馈实录收集（课后进报告 live_feedback 区）—— #
+
+
+def test_desk_collects_live_feedback_records():
+    # correction / teaching 与 WS 事件同源同序；live_feedback() 导出完整实录
+    desk = _desk()
+    asyncio.run(desk.on_tool_call("language_help", _args(kind="explicit_ask")))
+    asyncio.run(
+        desk.on_tool_call(
+            "grammar_note",
+            {"original": "I want order pasta", "fixed": "I'd like to order pasta", "note": "politeness"},
+        )
+    )
+    lf = desk.live_feedback()
+    assert [t.chinese for t in lf.teachings] == ["意大利面"]
+    assert lf.teachings[0].english == "spaghetti"
+    assert lf.teachings[0].kind == "explicit_ask"
+    assert lf.corrections[0].original == "I want order pasta"
+    assert lf.corrections[0].spoken is True
+
+
+def test_desk_collects_suppressed_correction_with_spoken_false():
+    # 控频压掉的纠错不口头说，但实录照收（spoken=False 区分）——数据不丢
+    clock = FakeClock()
+    desk = _desk(clock=clock)
+    asyncio.run(desk.on_tool_call("grammar_note", _gargs()))
+    clock.advance(1)                              # 防双发窗口内：第二条被压成静默
+    asyncio.run(desk.on_tool_call("grammar_note", _gargs(original="a cat", fixed="the cat", note="article")))
+    lf = desk.live_feedback()
+    assert [c.spoken for c in lf.corrections] == [True, False]
+    assert lf.corrections[1].note == "article"
+
+
+def test_desk_collects_even_when_ws_broken():
+    # WS 已死事件发不出，实录照收——报告不因前端断开丢素材
+    desk = _desk(FakeWs(broken=True))
+    asyncio.run(desk.on_tool_call("grammar_note", _gargs()))
+    lf = desk.live_feedback()
+    assert len(lf.corrections) == 1 and lf.corrections[0].fixed == "I went yesterday"
+
+
+def test_desk_collects_teaching_with_missing_chinese():
+    # 模型漏填 chinese / example：实录收空串不炸（review W5）
+    desk = _desk()
+    asyncio.run(
+        desk.on_tool_call("language_help", {"kind": "explicit_ask", "english": "pasta"})
+    )
+    lf = desk.live_feedback()
+    assert lf.teachings[0].chinese == ""
+    assert lf.teachings[0].english == "pasta"
+    assert lf.teachings[0].example == ""
+
+
+def test_live_feedback_none_when_no_events():
+    # 零事件返回 None（非空结构）：报告字段 null = 无 live 反馈，前端按 null 隐藏
+    assert _desk().live_feedback() is None
+
+
 # —— grammar_note（B1 语法纠错：检出归模型，呈现归控频三态）—— #
 
 

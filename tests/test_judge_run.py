@@ -19,6 +19,8 @@ from app.report import (
     Dimensions,
     JudgeDiagnostics,
     JudgeReport,
+    LiveCorrection,
+    LiveFeedback,
     Report,
     SyntacticAnalysis,
     TopPriority,
@@ -211,6 +213,39 @@ def test_scenario_forces_empty_rewrites_keeps_summary(monkeypatch):
     rep = judge_run.run_judge(mode="scenario", transcript=TR, signals=SIG, scenario_case="ordering")
     assert rep.diagnostics.rewrites == []
     assert rep.diagnostics.summary == "点单完成度好；祈使句偏硬，先套 Could I... 句式。"
+
+
+def _lf() -> LiveFeedback:
+    return LiveFeedback(
+        corrections=[LiveCorrection(original="a cat", fixed="the cat", note="article", spoken=True)],
+        teachings=[],
+    )
+
+
+def test_scenario_attaches_live_feedback_and_feeds_judge(monkeypatch):
+    # FC 实录：①注入 judge prompt 作输入材料 ②系统直落报告 live_feedback 字段
+    fake = _patch(monkeypatch, _judged(None))
+    rep = judge_run.run_judge(
+        mode="scenario", transcript=TR, signals=SIG,
+        scenario_case="ordering", live_feedback=_lf(),
+    )
+    assert rep.live_feedback == _lf()
+    assert "会话内即时反馈实录" in fake.models.last["contents"][0]
+
+
+def test_ielts_ignores_live_feedback(monkeypatch):
+    # 模式守门：雅思误传 live_feedback（不可能路径的防御）不进 prompt、不挂报告
+    fake = _patch(monkeypatch, _judged(_dims()))
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, live_feedback=_lf())
+    assert rep.live_feedback is None
+    assert "会话内即时反馈实录" not in fake.models.last["contents"][0]
+
+
+def test_scenario_without_live_feedback_keeps_field_none(monkeypatch):
+    # 情景零实录（没调过 tool）：字段保持 None，前端按 null 隐藏整区
+    _patch(monkeypatch, _judged(None))
+    rep = judge_run.run_judge(mode="scenario", transcript=TR, signals=SIG, scenario_case="ordering")
+    assert rep.live_feedback is None
 
 
 def test_scenario_missing_summary_degrades_with_warning(monkeypatch, caplog):

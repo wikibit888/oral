@@ -3,7 +3,7 @@
 import pytest
 
 from app.judge.prompt import build_judge_prompt, load_band_descriptors
-from app.report import Report
+from app.report import LiveCorrection, LiveFeedback, LiveTeaching, Report
 
 SIGNALS = {"gross_wpm": 137.1, "type_token_ratio": 0.71, "filler_per_min": 17.14}
 TRANSCRIPT = "I think science is mostly about curiosity."
@@ -54,6 +54,40 @@ def test_scenario_prompt_no_rewrites_with_summary():
     ielts = build_judge_prompt("ielts", transcript_text=TRANSCRIPT, signals=SIGNALS, sub_mode="exam")
     assert "仅雅思产出" in ielts
     assert "雅思留 null" in ielts
+
+
+def test_scenario_prompt_injects_live_feedback_block():
+    """FC 反馈实录作输入材料注入：纠错对照 + 中文求助；无实录 / 空实录不注入。"""
+    lf = LiveFeedback(
+        corrections=[
+            LiveCorrection(
+                original="I want order pasta", fixed="I'd like to order pasta",
+                note="politeness", spoken=True,
+            )
+        ],
+        teachings=[
+            LiveTeaching(
+                kind="mixed_cn", chinese="意大利面", english="spaghetti",
+                example="Could I get the spaghetti, please?",
+            )
+        ],
+    )
+    p = build_judge_prompt(
+        "scenario", transcript_text=TRANSCRIPT, signals=SIGNALS,
+        scenario_case="ordering", live_feedback=lf,
+    )
+    assert "会话内即时反馈实录" in p
+    assert "语法纠错 1 条" in p and "I'd like to order pasta" in p
+    assert "中文求助 1 条" in p and "「意大利面」 → spaghetti" in p
+    assert "transcript 为准" in p              # 用途边界：证据引用仍只认 transcript
+    # 不传 / 空实录都不注入
+    p0 = build_judge_prompt("scenario", transcript_text=TRANSCRIPT, signals=SIGNALS, scenario_case="ordering")
+    assert "会话内即时反馈实录" not in p0
+    p1 = build_judge_prompt(
+        "scenario", transcript_text=TRANSCRIPT, signals=SIGNALS,
+        scenario_case="ordering", live_feedback=LiveFeedback(corrections=[], teachings=[]),
+    )
+    assert "会话内即时反馈实录" not in p1
 
 
 def test_scenario_prompt_uses_case_prompt_when_given():

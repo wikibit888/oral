@@ -99,7 +99,7 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def no_finalize(monkeypatch):
     """默认掐掉课后 finalize 与切片 ingest（真实现要跑 whisper/judge）；专项测试自行覆盖。"""
-    monkeypatch.setattr("app.api.live_ws.finalize_session", lambda session_id: None)
+    monkeypatch.setattr("app.api.live_ws.finalize_session", lambda session_id, **kw: None)
     monkeypatch.setattr("app.live.tee.save_clip", lambda sid, seq, pcm: f"/fake/{sid}_{seq}.wav")
     monkeypatch.setattr("app.live.tee.ingest_clip", lambda *a, **kw: None)
     yield
@@ -665,9 +665,11 @@ def test_end_session_triggers_finalize(client, monkeypatch):
     _patch_session(monkeypatch, FakeLiveSession(responses=[]))
     called = threading.Event()
     finalized: list[str] = []
+    captured: dict = {}
 
-    def fake_finalize(session_id):
+    def fake_finalize(session_id, live_feedback=None):
         finalized.append(session_id)
+        captured["live_feedback"] = live_feedback
         called.set()
 
     monkeypatch.setattr("app.api.live_ws.finalize_session", fake_finalize)
@@ -679,6 +681,50 @@ def test_end_session_triggers_finalize(client, monkeypatch):
     # finalize 在 WS 关闭后丢线程后台跑，等它落地
     assert called.wait(timeout=5), "end_session 后 finalize 未被触发"
     assert finalized == [session_id]
+    assert captured["live_feedback"] is None        # 零 tool 调用 → 无实录
+
+
+def test_end_session_passes_live_feedback_to_finalize(client, monkeypatch):
+    """全链实录流（PR live-feedback-report）：grammar_note 调用被应答台收集，
+    end_session 收口时实录从应答台导出、传进课后 finalize。"""
+    tool_call = SimpleNamespace(
+        function_calls=[
+            SimpleNamespace(
+                id="fc-3",
+                name="grammar_note",
+                args={
+                    "original": "I go yesterday",
+                    "fixed": "I went yesterday",
+                    "note": "past tense",
+                },
+            )
+        ]
+    )
+    session = FakeLiveSession(
+        responses=[SimpleNamespace(data=None, server_content=None, tool_call=tool_call)]
+    )
+    _patch_session(monkeypatch, session)
+    called = threading.Event()
+    captured: dict = {}
+
+    def fake_finalize(session_id, live_feedback=None):
+        captured["live_feedback"] = live_feedback
+        called.set()
+
+    monkeypatch.setattr("app.api.live_ws.finalize_session", fake_finalize)
+
+    with client.websocket_connect("/ws/live?mode=scenario&case=ordering") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        assert ws.receive_json()["type"] == "correction"   # 卡片照发，与实录同源
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert called.wait(timeout=5), "end_session 后 finalize 未被触发"
+    lf = captured["live_feedback"]
+    assert lf is not None and len(lf.corrections) == 1
+    assert lf.corrections[0].original == "I go yesterday"
+    assert lf.corrections[0].fixed == "I went yesterday"
+    assert lf.corrections[0].spoken is True
+    assert lf.teachings == []
 
 
 class TriggeredFakeLiveSession(FakeLiveSession):
@@ -737,7 +783,7 @@ def test_live_clips_ingested_then_finalized(client, monkeypatch):
         order.append("ingest")
         clips.append((len(pcm_by_path[path]), start_ts, end_ts))
 
-    def fake_finalize(session_id):
+    def fake_finalize(session_id, live_feedback=None):
         order.append("finalize")
         finalize_done.set()
 

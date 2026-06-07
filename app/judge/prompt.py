@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+from app.report import LiveFeedback
+
 _DESCRIPTORS_PATH = Path(__file__).parent / "band_descriptors.md"
 
 
@@ -140,6 +142,7 @@ def build_judge_prompt(
     sub_mode: str | None = None,
     scenario_case: str | None = None,
     case_prompt: str | None = None,
+    live_feedback: LiveFeedback | None = None,
 ) -> str:
     """组装一次 judge 调用的内容 prompt。
 
@@ -148,6 +151,8 @@ def build_judge_prompt(
     （四维仍内部判定供系统检测 unscorable，最终报告由 run_judge 置空）。
     mode='scenario' 注入 case prompt 且禁 band。
     case_prompt 为情景 case 侧重段（P5 写数据文件传入）；缺省时给占位提示。
+    live_feedback 为情景会话内 FC 反馈实录（仅情景传入）：作为输入材料注入，
+    judge 统计 / 诊断时纳入，但证据引用仍只以 transcript 为准。
     """
     if mode == "ielts":
         if sub_mode in MODULE_FOCUS:
@@ -162,22 +167,51 @@ def build_judge_prompt(
 
     signals_json = json.dumps(dict(signals), ensure_ascii=False, indent=2)
 
-    return "\n".join(
-        [
-            "你是严格、专业的英语口语考官 / 诊断教练。一次性产出整份结构化报告。",
-            "",
-            GROUNDING_RULES,
-            "",
-            LANGUAGE_RULES,
-            "",
-            mode_section,
-            "",
-            DIAGNOSTIC_INSTRUCTIONS,
-            "",
-            "—— 考生 transcript（逐字，证据只能引自这里）——",
-            transcript_text,
-            "",
-            "—— 客观信号（确定性，作为判断输入 / 佐证）——",
-            signals_json,
+    sections = [
+        "你是严格、专业的英语口语考官 / 诊断教练。一次性产出整份结构化报告。",
+        "",
+        GROUNDING_RULES,
+        "",
+        LANGUAGE_RULES,
+        "",
+        mode_section,
+        "",
+        DIAGNOSTIC_INSTRUCTIONS,
+        "",
+        "—— 考生 transcript（逐字，证据只能引自这里）——",
+        transcript_text,
+        "",
+        "—— 客观信号（确定性，作为判断输入 / 佐证）——",
+        signals_json,
+    ]
+    block = _live_feedback_block(live_feedback)
+    if block:
+        sections += ["", block]
+    return "\n".join(sections)
+
+
+def _live_feedback_block(lf: LiveFeedback | None) -> str | None:
+    """情景会话内 FC 反馈实录 → judge 输入材料文本块；无实录返回 None。
+
+    用途边界写进块头：①frequent_errors / top_priorities / summary 统计诊断时
+    纳入这些当场检出的错误与求助；②证据引用仍只以 transcript 为准（实录的
+    original 是模型当场转述，不保证与 ASR 转写逐字一致）；③已当场纠正的错
+    不重复罗列为新发现。
+    """
+    if lf is None or (not lf.corrections and not lf.teachings):
+        return None
+    lines = [
+        "—— 会话内即时反馈实录（系统日志，非考生 transcript：其中的英文句子"
+        "**不得**引用进 evidence / examples / occurrences 等逐字引用字段，证据仍只"
+        "以上方 transcript 为准；统计 / 诊断时纳入这些当场检出的错误与求助；"
+        "教练已当场处理过的不要当新发现重复罗列）——"
+    ]
+    if lf.corrections:
+        lines.append(f"语法纠错 {len(lf.corrections)} 条：")
+        lines += [
+            f"- “{c.original}” → “{c.fixed}”（{c.note}）" for c in lf.corrections
         ]
-    )
+    if lf.teachings:
+        lines.append(f"中文求助 {len(lf.teachings)} 条：")
+        lines += [f"- 「{t.chinese}」 → {t.english}" for t in lf.teachings]
+    return "\n".join(lines)

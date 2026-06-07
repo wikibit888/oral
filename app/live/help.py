@@ -9,7 +9,9 @@
 ②模板控形：按 kind 查指令模板并**确定性轮换**（防生硬重复，同 openers
   的"不重样"思路，但轮换可测）；
 ③连续求助控频：窗口内连续第 N 次起换「鼓励先自己试」指令
-  （SCENARIO_CASE.md A4 的「查词典模式」风险在代码里硬解）。
+  （SCENARIO_CASE.md A4 的「查词典模式」风险在代码里硬解）；
+④反馈实录收集：correction / teaching 与 WS 事件同源同序留存，课后经
+  live_feedback() 导出进报告（live_ws 收口时取走）。
 
 ScenarioNudger 是 D1 沉默分级探询的后端执行端（SCENARIO_CASE.md D1）：前端
 沉默计时器分级发 nudge {stage} 控制消息（bridge 上行泵接线），这里查表注入
@@ -23,6 +25,7 @@ import time
 from contextlib import suppress
 
 from app.live.director import send_stage_direction
+from app.report import LiveCorrection, LiveFeedback, LiveTeaching
 from app.scenario_cases import (
     CASES,
     GRAMMAR_AFTER_HELP_DIRECTIVE,
@@ -70,6 +73,10 @@ class LanguageHelpDesk:
         self._last_help_kind: str | None = None       # 与 streak 钟分离，grammar 用后即耗）
         self._grammar_spoken_at: float | None = None  # 口头纠错防双发闸
         self._grammar_spoken_count = 0                # 口头纠错次数：模板轮换游标
+        # 反馈实录（课后进报告 live_feedback 区）：与 WS 事件同源同序；
+        # WS 已死事件发不出也照收——报告不应因前端断开丢素材。
+        self._corrections: list[LiveCorrection] = []
+        self._teachings: list[LiveTeaching] = []
 
     async def on_tool_call(self, name: str, args: dict) -> dict:
         """处理一次模型 tool 调用，返回 tool response 体（必须瞬时，无外呼）。
@@ -94,6 +101,12 @@ class LanguageHelpDesk:
         example = args.get("example") or ""
         self._last_help_at = self._clock()   # grammar 同轮重叠判定用（专用钟）
         self._last_help_kind = kind
+        self._teachings.append(
+            LiveTeaching(
+                kind=kind, chinese=args.get("chinese") or "",
+                english=english, example=example,
+            )
+        )
         directive = self._pick_directive(kind, english, example)
         # teaching 事件 best-effort：WS 已死说明会话正收束，不能连累 tool 响应
         # （模型还在等 send_tool_response，泵随取消收场）
@@ -178,6 +191,9 @@ class LanguageHelpDesk:
             .replace("{fixed}", fixed)
             .replace("{original}", original)
         )
+        self._corrections.append(
+            LiveCorrection(original=original, fixed=fixed, note=note, spoken=spoken)
+        )
         with suppress(Exception):
             await self._ws.send_json(
                 {
@@ -190,6 +206,17 @@ class LanguageHelpDesk:
                 }
             )
         return {"directive": directive}
+
+    def live_feedback(self) -> LiveFeedback | None:
+        """导出本场反馈实录（课后报告 live_feedback 区）；无任何事件返回 None。
+
+        None 而非空结构：报告字段 null = 「无 live 反馈」，前端按 null 隐藏整区。
+        """
+        if not self._corrections and not self._teachings:
+            return None
+        return LiveFeedback(
+            corrections=list(self._corrections), teachings=list(self._teachings)
+        )
 
 
 NUDGE_DEBOUNCE_S = 8   # 距上次 nudge < 此值忽略（防前端计时器 bug 连发轰炸模型）

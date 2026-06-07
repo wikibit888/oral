@@ -27,7 +27,14 @@ from app.config import settings
 from app.judge.aggregate import aggregate_overall_band, round_to_half
 from app.judge.prompt import build_judge_prompt
 from app.models import AudioClip, Transcript
-from app.report import Diagnostics, Dimensions, JudgeReport, PracticeSummary, Report
+from app.report import (
+    Diagnostics,
+    Dimensions,
+    JudgeReport,
+    LiveFeedback,
+    PracticeSummary,
+    Report,
+)
 from app.signals import ObjectiveSignals
 
 logger = logging.getLogger(__name__)
@@ -134,6 +141,7 @@ def run_judge(
     sub_mode: str | None = None,
     scenario_case: str | None = None,
     case_prompt: str | None = None,
+    live_feedback: LiveFeedback | None = None,
     sessions: int = 1,
     recordings: int = 1,
 ) -> Report:
@@ -142,6 +150,10 @@ def run_judge(
     上游 5xx 按 JUDGE_RETRY_BACKOFF_S 退避重试（_generate_with_retry）；
     重试耗尽仍失败则异常上抛、pipeline 置 failed。
     """
+    # live_feedback 只在情景有意义（雅思无 tools、方式 B 无 Live）：模式守门
+    # 放调用端入口，prompt 注入与报告挂载都吃守门后的值，单点裁决。
+    if mode != "scenario":
+        live_feedback = None
     prompt = build_judge_prompt(
         mode,
         transcript_text=transcript.text,
@@ -149,6 +161,7 @@ def run_judge(
         sub_mode=sub_mode,
         scenario_case=scenario_case,
         case_prompt=case_prompt,
+        live_feedback=live_feedback,
     )
 
     contents: list = [prompt]
@@ -226,6 +239,8 @@ def run_judge(
             # summary 是情景报告的收尾段：模型漏填只降级（前端按 null 隐藏总结段），
             # 不抛错不补写，记 warning 保留可观测性（review W1）。
             logger.warning("run_judge: 情景 judge 未产出 summary，报告将无总结段。")
+        # FC 反馈实录系统直落（数据已结构化，不经 LLM 转述）；无实录为 None。
+        report.live_feedback = live_feedback
 
     if mode == "ielts":
         # summary 仅情景对话产出（雅思已有 top_priorities 收口）——LLM 误填也剥除。

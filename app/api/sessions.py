@@ -198,6 +198,8 @@ async def _drain_and_finalize(session_id: str) -> None:
 
 def _run_finalize(session_id: str) -> None:
     # finalize_session 失败时已在自身 except 里置 status=failed 并记日志；这里的
-    # suppress 只是防后台 task 留未取异常，不会丢失任何状态/日志副作用
+    # suppress 只是防后台 task 留未取异常，不会丢失任何状态/日志副作用。
+    # 方式 B 无 Live、无 FC 应答台：finalize 的 live_feedback 走默认 None
+    # （live 路径的同名包装在 live_ws.py，签名多一个 live_feedback——勿混淆）。
     with suppress(Exception):
         finalize_session(session_id)

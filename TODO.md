@@ -80,14 +80,14 @@
 
 **🔴 demo 前应修**
 - [ ] `pyaudio` 移出主依赖（仅 `gemini_live.py` 用；无 portaudio 的机器 `uv sync` 直接构建失败）——`pyproject.toml:12`，移 dev/optional 组 + 文档注明
-- [ ] 方式 A「模型抢戏」done 不发（done/005 🔴）：persona 加「禁止自行宣布考试结束」规则 + closing 对策（轮数对齐/检测兜底）——`director.py:27–37,140`；修复后投 handoff 前端补验 done UI
+- [x] 方式 A「模型抢戏」done 不发（done/005 🔴）：persona 加「禁止自行宣布考试结束」规则 + closing 对策（轮数对齐/检测兜底）——2026-06-07 PR #26 导演重做为模型驱动整体解决：persona 内置「Never announce…early」+ 收尾短语全状态检测（变体拓宽）+ done 停输入；前端播完收尾语音自动收束（Live.jsx 随前端轨），用户真链路实测 done→自动跳报告通过
 - [ ] `_pick_cue_card` 空题库 IndexError 防护 + 测试（题库损坏时方式 A 入口对用户不透明失败）——`live_ws.py:177`
 
 **🟡 功能隐患**
 - [ ] `speaking_time_s` 非负钳制（whisper 时间戳异常可写负值进报告）——`signals.py:86` 一行 `max(0.0, …)`
 - [ ] 方式 B 并发 ingest 加 whisper 串行锁（live tee 有 `_ingest_lock`、方式 B 没有，快速连传可并发调 transcribe）——`sessions.py:164`
 - [ ] pipeline 落库测试修正：现用 module_p2 mock 绕过剥 band 断言 band 落库（假阳性）；补 exam 真 band + module_p2 无 band 两用例——`test_pipeline.py:110`
-- [ ] p2_talk 长谈 2 分钟上限计时器（现全靠模型自觉，不接手则 FSM 卡死）——`director.py`
+- [x] p2_talk 长谈 2 分钟上限计时器（现全靠模型自觉，不接手则 FSM 卡死）——2026-06-07 随 PR #26：MAX_P2_TALK_S=210s 安全网（长谈+追问+转场上限，到点逼考官说转场句进 P3），各段均有同款防挂死计时器
 - [ ] PTT 按住不松直接 End：`activity_open` 悬挂不发 `activity_end`（疑与 done/004 上游 1007 相关）+ 测试——`bridge.py:102`
 - [ ] director `_prep_task` 纳入强引用集合 + `_end_prep` 写已关 WS 加 suppress（竞态日志噪音）——`director.py:176,190`
 - [ ] Live session 并发写防护（导演 `send_client_content` 与上行 `send_realtime_input` 无锁交错，1008 根因候选）——随 P8 1008 复查一并处理（加锁或 turn_complete=False 探针）
@@ -128,5 +128,6 @@
 2026-06-07 — **P6 seed 脚本完成并勾选**（PR #23）：`python -m app.seed` 7 条历史会话（A×3 band 5.5→6.0→6.5 真聚合 + B×2 + 情景×2；wpm/静默/填充/错误率/ttr 单调向好）；幂等重插 + --purge 只删 seed 行（真实行零波及测试钉死）；report_json 经 Report 模型同 schema、evidence 纯英文 ASR 转写体 + CJK 护栏。pytest 212 绿（+11）+ 真冒烟（seed→曲线爬升→purge 还原）+ review 首轮 NEEDS-FIX（🔴 evidence 引证违规×5）→修→复审 PASS。F5 前端随 007 回执 PASS 收官（Library+Review 两页真数据联调过，error_rate 加线已采纳）；007 反馈记两条新 TODO（live duration_s 漏落库 / 瞬态残留清理）；真库已播种 + handoff/inbox/008 验证件已投。下次：修 live duration_s 或方式 A done 不发（done/005 🔴）
 2026-06-07 — **live duration_s 回填完成并勾选**（PR #24，done/007 反馈①闭环）：session_started 后记单调钟起点，end_session 回调内墙钟差值回填 + 翻 processing 同瞬间；弃局不回填留 NULL；方式 B 互踩不可能（status 门 409）。pytest 213 绿（+1 用例 + 弃局 NULL 不变式断言）+ 真冒烟（真 Live 建链 sleep 2.2s→库里 2.20s 精确吻合）+ review PASS。存量旧 live 行仍 '—' 属预期（不回写历史）。下次：修方式 A done 不发（done/005 🔴 模型抢戏）或 P8 残留清理
 2026-06-07 — **P0–P6 后端全量巡检**（7 子 agent 并行，一人一 Priority，只读审计）：去重后产出 3🔴 + 12🟡 + 4🔵 打包项，新开 P9 巡检修复批次记录（每条带文件:行号与来源）。🔴：pyaudio 主依赖破坏 uv sync / 方式 A done 不发零修复 / _pick_cue_card 空库 IndexError。亮点确认干净：竞态关死、band 剥除三重防线、迁移原子性、注册表白名单、零 TODO/FIXME 残留。未动任何代码 / 无阻塞 / 下次：从 P9 🔴 三项开工（pyaudio 最小、done 不发价值最大）
+2026-06-07 — **方式 A live 转场 edge case 修复**（PR #26）：导演状态机重做为模型驱动（考官自说宣告句 + 短语检测种 _pending + 延迟到 turn_complete 兑现 + 分层安全网），其上修四项实测问题——①开场防吞（建链即门控麦克风防积压帧 barge-in + 10s 开场看门狗重发）②备题倒计时延迟到念题轮说完才起跳（45s 兜底 + 抢按 ready 缓行）③P2→P3 短语拓宽（we've been talking about / part 3 等）配状态门防 P1 误跳 ④done 停输入 + 前端播完收尾语音自动收束跳报告（Live.jsx 随前端轨不入 PR）。pytest 234 绿（+9）+ review 两轮（NEEDS-FIX 3 项：开场轮检测门控/裸锚撞追问/前端 fail 误导航，修复后 PASS）+ 用户真链路实测通过；连带勾 P9 两项（done 不发 / p2_talk 上限计时器）/ 无阻塞 / 下次：P9 余下 🔴 两项（pyaudio 移依赖 / _pick_cue_card 空库防护）
 
 

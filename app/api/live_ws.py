@@ -28,7 +28,9 @@ from app.live.bridge import bridge
 from app.live.client import connect_live
 from app.live.director import (
     EXAMINER_SYSTEM_INSTRUCTION,
+    EXAMINER_VOICES,
     IeltsDirector,
+    pick_examiner_voice,
     send_stage_direction,
 )
 from app.live.help import LanguageHelpDesk, ScenarioNudger
@@ -99,15 +101,21 @@ async def live_ws(websocket: WebSocket) -> None:
     # 无 tools 保持中立；情景：按 case 注入角色 persona + language_help tool
     # （声明按 case 生成——场景标签锚定模型选词；_parse_params 已保证 case 在注册表内）
     tools = None
+    voice = None
     if sub_mode == "exam":
         system_instruction = EXAMINER_SYSTEM_INSTRUCTION
+        # 每场随机抽考官音色（LIVE_VOICE 配置非空则固定）；考官自报姓名与音色
+        # 同源派生（EXAMINER_VOICES 注册表），随 director 开场指令注入
+        voice = pick_examiner_voice()
     elif mode == "scenario":
         system_instruction = SCENARIO_CASES[scenario_case].persona
         tools = [language_help_tool(scenario_case)]
     else:
         system_instruction = None
     try:
-        async with connect_live(turn_mode, system_instruction, tools) as live_session:
+        async with connect_live(
+            turn_mode, system_instruction, tools, voice=voice
+        ) as live_session:
             # Live 建链成功才落会话行（连不上不留孤儿行）。客户端中途断开的
             # 会话不触发 judge（契约：仅 end_session 触发）：说过话的停在
             # recording 态留素材，零切片的在 finally 里清掉。
@@ -150,7 +158,11 @@ async def live_ws(websocket: WebSocket) -> None:
             tool_handler = None
             nudger = None
             if sub_mode == "exam":
-                director = IeltsDirector(_pick_cue_card())
+                # 考官名 = 本场音色对应名（注册表外的自定义 LIVE_VOICE 直接用音色名）
+                director = IeltsDirector(
+                    _pick_cue_card(),
+                    examiner_name=EXAMINER_VOICES.get(voice, voice),
+                )
                 await director.start(websocket, live_session)
             elif mode == "scenario":
                 # 情景也由 AI 先开口（done/006 实录用户面对冷场先说话）：

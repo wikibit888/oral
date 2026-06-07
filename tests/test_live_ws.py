@@ -109,10 +109,13 @@ def no_finalize(monkeypatch):
 
 def _patch_session(monkeypatch, session) -> None:
     @asynccontextmanager
-    async def fake_connect(turn_mode="natural", system_instruction=None, tools=None):
+    async def fake_connect(
+        turn_mode="natural", system_instruction=None, tools=None, voice=None
+    ):
         session.turn_mode = turn_mode  # 记录穿透到连接层的轮次模式
         session.system_instruction = system_instruction  # persona（方式 A 考官）
         session.tools = tools          # function calling 声明（情景 language_help）
+        session.voice = voice          # 本场音色（方式 A 随机抽；情景 None）
         yield session
 
     monkeypatch.setattr("app.api.live_ws.connect_live", fake_connect)
@@ -168,6 +171,25 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
     assert session.system_instruction is not None and "examiner" in session.system_instruction
     assert len(session.directions) == 1
     assert session.tools is None         # 考官无 tools：中立零破壁
+    # 接缝断言（review W1）：随机音色穿透到连接层且来自注册表；
+    # 开场指令自报的名字与该音色同源（注册表派生）
+    from app.live.director import EXAMINER_VOICES
+    assert session.voice in EXAMINER_VOICES
+    opening = session.directions[0].parts[0].text
+    assert f'introduce yourself as "{EXAMINER_VOICES[session.voice]}"' in opening
+
+
+def test_ielts_a_voice_pinned_by_config(client, monkeypatch):
+    # LIVE_VOICE 非空 → 固定音色穿透（不随机）
+    monkeypatch.setattr(settings, "live_voice", "Aoede")
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+
+    with client.websocket_connect("/ws/live?mode=ielts_a") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        ws.send_text(json.dumps({"type": "end_session"}))
+
+    assert session.voice == "Aoede"
 
 
 @pytest.mark.parametrize("case", ["ordering", "meeting"])
@@ -194,6 +216,7 @@ def test_session_started_creates_scenario_row(client, monkeypatch, case):
     # 情景声明 language_help tool（function calling 教练通道，按 case 注入场景标签）
     assert session.tools == [language_help_tool(case)]
     assert SCENARIO_CASES[case].scene_label in str(session.tools)
+    assert session.voice is None         # 情景不参与随机音色（默认音色不变）
 
 
 def test_scenario_tool_call_answered_and_teaching_event(client, monkeypatch):

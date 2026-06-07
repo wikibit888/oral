@@ -17,7 +17,9 @@ def _connect_factory(fail_times: int, exc: Exception, attempts: list):
     """返回 _connect_once 替身：前 fail_times 次 __aenter__ 抛 exc，之后成功。"""
 
     @asynccontextmanager
-    async def fake_connect_once(turn_mode="natural", system_instruction=None, tools=None):
+    async def fake_connect_once(
+        turn_mode="natural", system_instruction=None, tools=None, voice=None,
+    ):
         attempts.append(turn_mode)
         if len(attempts) <= fail_times:
             raise exc
@@ -48,6 +50,25 @@ def test_live_config_ptt_disables_vad():
     # natural 不带该键；模块常量不被污染（深拷贝语义）
     assert "realtime_input_config" not in client_module._live_config("natural")
     assert "realtime_input_config" not in client_module.LIVE_CONFIG
+
+
+def test_live_config_voice(monkeypatch):
+    # 显式 voice → speech_config 注入；不给且 LIVE_VOICE 空 → 不注入（模型默认音色）；
+    # LIVE_VOICE 配置非空 → 回落用它；模块常量不被污染
+    monkeypatch.setattr(client_module.settings, "live_voice", "")
+    cfg = client_module._live_config("natural", voice="Kore")
+    assert (
+        cfg["speech_config"]["voice_config"]["prebuilt_voice_config"]["voice_name"]
+        == "Kore"
+    )
+    assert "speech_config" not in client_module._live_config("natural")
+    monkeypatch.setattr(client_module.settings, "live_voice", "Aoede")
+    cfg = client_module._live_config("natural")
+    assert (
+        cfg["speech_config"]["voice_config"]["prebuilt_voice_config"]["voice_name"]
+        == "Aoede"
+    )
+    assert "speech_config" not in client_module.LIVE_CONFIG
 
 
 def test_second_failure_raises(monkeypatch):
@@ -87,7 +108,9 @@ def test_midsession_oserror_not_retried(monkeypatch):
     attempts: list = []
 
     @asynccontextmanager
-    async def fake_connect_once(turn_mode="natural", system_instruction=None, tools=None):
+    async def fake_connect_once(
+        turn_mode="natural", system_instruction=None, tools=None, voice=None,
+    ):
         attempts.append(turn_mode)
         yield "session"
 

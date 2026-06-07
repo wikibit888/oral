@@ -35,10 +35,15 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# vibe coding
+# vibe coding（本地工作档案，不入远程库）
 docs/
 handoff/
 reverse/
+CLAUDE.md
+TODO.md
+TODO.frontend.md
+gemini_live.py
+.claude/
 
 # SQLite 本地 demo 数据库
 *.db

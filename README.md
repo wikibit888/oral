@@ -32,7 +32,6 @@
 两个关键设计：
 
 - **自建客户端包住 Gemini Live**：只有自己代理才能 tee 原始音频流用于评测；本地部署下代理走 localhost，不牺牲亚秒级延迟。
-- **仅方式 B 不依赖 Live**：Live 挂掉时方式 A 与情景对话直接报错（不降级），方式 B + 完整评测流水线仍端到端可用。
 
 ## 技术栈
 
@@ -46,7 +45,7 @@
 ```bash
 uv sync                        # 安装依赖
 cp .env.example .env           # 填入 GEMINI_API_KEY（必须）、GEMINI_PROXY（可选）
-uv run python -m app.tts       # 预生成题目音频（一次性，方式 B 需要）
+uv run python -m app.tts       # 预生成题目音频（一次性，雅思的recording模式需要）
 uv run python -m app.seed      # 预置 7 条演示历史会话（进步曲线开箱可见）
 APP_RELOAD=0 uv run python main.py          # 启动后端 :8000（热重载会掐断 live WS，务必关）
 cd frontend && npm install && npm run dev   # 前端 dev server（/api 代理到 :8000）
@@ -55,7 +54,6 @@ cd frontend && npm install && npm run dev   # 前端 dev server（/api 代理到
 ```bash
 uv run pytest                  # 后端测试
 cd frontend && npm test        # 前端测试
-uv run python gemini_live.py   # Gemini Live 最小往返 demo
 ```
 
 ## 目录
@@ -73,7 +71,6 @@ app/               # FastAPI 后端
 frontend/          # React + Vite
 data/              # 音频切片 / 题库
 tests/             # pytest
-TODO.md            # 进度唯一事实源
 ```
 
 ## To Do

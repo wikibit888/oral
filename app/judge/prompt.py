@@ -51,7 +51,9 @@ MODULE_FOCUS = {
     "module_p2": (
         "Part 2（cue card 长谈）侧重：组织结构（开头点题—按 bullets 展开—收尾）、"
         "1–2 分钟持续输出的连贯性（连接词多样性、避免 'and then' 串句）、"
-        "话题展开充分度、长独白中的时态一致。"
+        "话题展开充分度、长独白中的时态一致。本模式每场仅一张卡一次长谈："
+        "signals 中的 speaking_time_s 即本次长谈时长，可对照官方 1–2 分钟要求"
+        "评达标度（明显不足时在诊断中指出时长偏短，不作为语言错误证据）。"
     ),
     "module_p3": (
         "Part 3（抽象讨论）侧重：论证结构（观点—理由—例证）、抽象与学术词汇、"
@@ -88,6 +90,11 @@ explanation 等任何诊断文本字段中**。
 def _ielts_instructions() -> str:
     return f"""\
 模式：雅思（IELTS Speaking）。按官方四维给 band，并产出诊断层。
+
+考试机制说明（评分时不得误判为考生失误）：Part 2 长谈满 2 分钟时考官会礼貌
+打断（"Thank you."）——独白在尾部戛然而止属系统按官方时长切断，不扣 fluency；
+长谈偏短时考官会探询一次 "Is there anything else you would like to add?"——
+这是标准考试流程话术，本身不代表考生表现不足。
 
 四维（填入 dimensions，每维：band + evidence[逐字] + descriptor_match + suggestions）：
 - fluency_coherence

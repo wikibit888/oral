@@ -13,7 +13,8 @@ def test_compose_plain_question_reads_text_as_is():
     assert compose_tts_text(q) == "Where is your hometown?"
 
 
-def test_compose_cue_card_joins_bullets_examiner_style():
+def test_compose_cue_card_reads_topic_only():
+    # 对齐拍板 D4（2026-06-07）：bullets 不口播——卡上展示即可，与 live 考官同规
     q = {
         "id": "p2-01",
         "text": "Describe a skill you would like to learn.",
@@ -21,9 +22,8 @@ def test_compose_cue_card_joins_bullets_examiner_style():
                     "how you would learn it", "and explain how it would help you"],
     }
     out = compose_tts_text(q)
-    assert out.startswith("Describe a skill")
-    assert "You should say: what the skill is; why you want to learn it; how you would learn it;" in out
-    assert out.endswith("and explain how it would help you.")
+    assert out == "Describe a skill you would like to learn."
+    assert "You should say" not in out and "bullet" not in out.lower()
 
 
 def test_write_wav_format(tmp_path):
@@ -58,9 +58,10 @@ def test_generate_all_incremental_and_failure_degrade(tmp_path, monkeypatch):
     assert stats2["generated"] == 1 and len(calls) == 1
 
 
-def test_compose_single_bullet_no_malformed_join():
-    q = {"id": "x", "text": "T.", "bullets": ["only item"]}
-    assert compose_tts_text(q) == "T. You should say: only item."
+def test_compose_ignores_bullets_shape_variants():
+    # D4 后 bullets 任何形态（缺失/单条/多条）都不影响朗读文本
+    assert compose_tts_text({"id": "x", "text": "T."}) == "T."
+    assert compose_tts_text({"id": "x", "text": "T.", "bullets": ["only item"]}) == "T."
 
 
 def test_429_retry_then_success(monkeypatch):

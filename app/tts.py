@@ -33,19 +33,13 @@ TTS_429_MAX_RETRIES = 3
 
 
 def compose_tts_text(question: dict) -> str:
-    """题目 → 考官朗读文本。
+    """题目 → 考官朗读文本：一律只读题面（方式 B 对齐拍板 D4/D5，2026-06-07）。
 
-    p1/p3 直接读题；p2 cue card 按考官口吻串联话题 + bullets
-    （"You should say ..., and finally explain ..."官方引导句式）。
+    p2 cue card 的 bullets 不口播——卡片上展示即可，与 live 考官同规
+    （persona：bullets 在考生卡上、考官不念）；不加引导句式/考官口吻
+    （裸题直读，刷题高效）。改动后 p2 旧音频需删除重生成（增量脚本只补缺）。
     """
-    text = question["text"]
-    bullets = question.get("bullets")
-    if not bullets:
-        return text
-    if len(bullets) == 1:                       # 单条无需分号串联（防 ": ; x" 畸形）
-        return f"{text} You should say: {bullets[0]}."
-    leading = "; ".join(b for b in bullets[:-1])
-    return f"{text} You should say: {leading}; {bullets[-1]}."
+    return question["text"]
 
 
 def synthesize(text: str) -> bytes:

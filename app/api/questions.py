@@ -42,6 +42,17 @@ class Question(BaseModel):
     tts_url: str | None = None      # 预生成 TTS；未生成为 null（前端纯文字降级）
 
 
+class TopicGroup(BaseModel):
+    topic_id: str                   # 如 p1-t01 / s-p2-... 兜底为 fallback-*
+    title: str                      # 话题标题（前端选题分组标题）
+    questions: list[Question]       # 该话题下可勾选的题（p2 恰一张题卡）
+
+
+class TopicsResponse(BaseModel):
+    part: str                       # p1 | p2 | p3
+    topics: list[TopicGroup]        # 该 Part 全量题目，按 topic 分组
+
+
 @lru_cache(maxsize=1)
 def _load_raw() -> dict:
     """读题库主文件；损坏/缺失则回退精选库（§7 新库优先、精选回退）。
@@ -173,3 +184,39 @@ async def list_questions(
         )
         for item in sampled
     ]
+
+
+@router.get("/questions/topics", response_model=TopicsResponse)
+async def list_topics(
+    part: str | None = Query(default=None, description="题目所属 Part：p1 | p2 | p3"),
+) -> TopicsResponse:
+    """选题 UI（方式 B / F1）：返回该 Part **全量**题目，按 topic 分组供用户勾选。
+
+    分组逻辑复用 load_topics（不在此重复）；每题经 Question 模型构造、tts_url 实时回填。
+    p2 题卡带 bullets，p1/p3 的 bullets 为 null。缺参与非法值统一走中文 422。
+    """
+    # 缺参与非法值统一走中文 422（与 GET /questions 文案一致，review W5）
+    if part not in VALID_PARTS:
+        raise HTTPException(
+            status_code=422, detail=f"part 必须是 {sorted(VALID_PARTS)} 之一"
+        )
+    return TopicsResponse(
+        part=part,
+        topics=[
+            TopicGroup(
+                topic_id=topic["topic_id"],
+                title=topic["title"],
+                questions=[
+                    Question(
+                        id=q["id"],
+                        part=part,
+                        text=q["text"],
+                        bullets=q.get("bullets"),
+                        tts_url=_tts_url(q["id"]),
+                    )
+                    for q in topic["questions"]
+                ],
+            )
+            for topic in load_topics(part)
+        ],
+    )

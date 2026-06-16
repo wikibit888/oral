@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 import pytest
@@ -101,6 +102,58 @@ def test_non_network_error_not_retried(monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(scenario())
     assert len(attempts) == 1
+
+
+_ALL_PROXY_ENV = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy",
+    "NO_PROXY", "no_proxy",
+)
+
+
+@pytest.fixture
+def clean_proxy_env(monkeypatch):
+    """清空全部代理相关环境变量并登记原值（monkeypatch 保证测试后整体还原，
+    含被测函数自己写入的 no_proxy=* 也会被回滚，避免串扰其它测试）。"""
+    for k in _ALL_PROXY_ENV:
+        monkeypatch.delenv(k, raising=False)
+    return monkeypatch
+
+
+def test_apply_ws_proxy_env_unset_leaves_env_untouched(clean_proxy_env):
+    # None（未配置）→ 完全不碰环境，交给 websockets 自动发现系统/shell 代理
+    clean_proxy_env.setattr(client_module.settings, "gemini_proxy", None)
+    clean_proxy_env.setenv("HTTP_PROXY", "http://shell:1")
+    clean_proxy_env.setenv("no_proxy", "shell-keep")
+    client_module._apply_ws_proxy_env()
+    assert os.environ["HTTP_PROXY"] == "http://shell:1"
+    assert os.environ["no_proxy"] == "shell-keep"
+
+
+@pytest.mark.parametrize("value", ["none", "off", "", "0", "  None  "])
+def test_apply_ws_proxy_env_none_forces_direct(clean_proxy_env, value):
+    # none/off → 清掉一切 *_PROXY 并设 no_proxy=*，强制直连（旁路 macOS 系统 SOCKS）
+    clean_proxy_env.setattr(client_module.settings, "gemini_proxy", value)
+    clean_proxy_env.setenv("HTTPS_PROXY", "http://stale:7897")
+    clean_proxy_env.setenv("ALL_PROXY", "socks5://stale:7897")
+    client_module._apply_ws_proxy_env()
+    for k in client_module._PROXY_ENV_KEYS:
+        assert k not in os.environ
+    assert os.environ["NO_PROXY"] == "*"
+    assert os.environ["no_proxy"] == "*"
+
+
+def test_apply_ws_proxy_env_explicit_proxy(clean_proxy_env):
+    # 指定代理 → 写 HTTP(S)_PROXY，并清掉强制直连态残留的 no_proxy/ALL_PROXY，
+    # 防 no_proxy=* 把刚设的代理旁路掉
+    clean_proxy_env.setattr(client_module.settings, "gemini_proxy", "http://127.0.0.1:7897")
+    clean_proxy_env.setenv("NO_PROXY", "*")
+    clean_proxy_env.setenv("ALL_PROXY", "socks5://stale")
+    client_module._apply_ws_proxy_env()
+    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert "NO_PROXY" not in os.environ and "no_proxy" not in os.environ
+    assert "ALL_PROXY" not in os.environ and "all_proxy" not in os.environ
 
 
 def test_midsession_oserror_not_retried(monkeypatch):

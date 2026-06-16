@@ -44,7 +44,7 @@
 
 ```bash
 uv sync                        # 安装依赖
-cp .env.example .env           # 填入 GEMINI_API_KEY（必须）、GEMINI_PROXY（必须）
+cp .env.example .env           # 填入 GEMINI_API_KEY（必须）、GEMINI_PROXY（可选，见下）
 uv run python -m app.tts       # 预生成题目音频（一次性，雅思的recording模式需要）
 uv run python -m app.seed      # 预置 7 条演示历史会话（进步曲线开箱可见）
 APP_RELOAD=0 uv run python main.py          # 启动后端 :8000（热重载会掐断 live WS，务必关）
@@ -55,7 +55,13 @@ cd frontend && npm install && npm run dev   # 前端 dev server（/api 代理到
 uv run pytest                  # 后端测试
 cd frontend && npm test        # 前端测试
 ```
-> 这是一条补充，由于开发时候的疏忽，代码后端有一个严重的bug，就是必须配置proxy才能使用，本地开发由于直连gemini被限制，始终在proxy环境下进行，忽略了这个问题，也是最后才发现。
+> **关于代理（GEMINI_PROXY，三态）**：Live 走 `websockets` 库，建链时它会自动发现系统代理。
+> - **不设置 / 注释掉** → 自动走系统代理：陆区命中系统 SOCKS/HTTP 代理（已内置 `python-socks`，SOCKS 可用），海外无代理则直连；
+> - **`GEMINI_PROXY=http://127.0.0.1:7897`**（或 `socks5://…`）→ 走指定代理；
+> - **`GEMINI_PROXY=none`** → 强制直连，忽略系统代理。
+>
+> 早期版本未带 `python-socks` 且未显式接管代理发现，导致系统开着 SOCKS 代理时建链报
+> `requires python-socks`、且 `none` 在 macOS 上无法真正直连（`getproxies()` 会回退读系统代理设置）——现已修复。
 
 ## 演示视频
 

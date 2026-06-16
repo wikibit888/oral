@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { MODE_IELTS } from '../lib/modes.js'
 import { PART_META, fetchQuestions, partParam, speechText } from '../lib/questions.js'
 import { sessions } from '../lib/sessionApi.js'
@@ -57,6 +57,9 @@ export default function Record() {
   const navigate = useNavigate()
   const mode = params.get('mode')
   const subMode = params.get('sub_mode')
+  const location = useLocation()
+  // 选题页（/ielts/select）带来的已选题；直链 /record 或刷新丢 state 时为 undefined → 回退随机抽样
+  const preselected = location.state?.questions
   const validEntry = mode === MODE_IELTS && partParam(subMode) != null
   const meta = PART_META[partParam(subMode)]
 
@@ -69,8 +72,9 @@ export default function Record() {
   const [elapsed, setElapsed] = useState(0)
   const [level, setLevel] = useState(0)
   const [prepLeft, setPrepLeft] = useState(null) // p2 备题剩余秒；null=不在备题
-  // 题目异步加载（GET /questions?part=）：null=加载中；loadError 可 Retry
-  const [questions, setQuestions] = useState(null)
+  // 题目来源：选题页已选题（preselected）直用；否则异步加载（GET /questions?part=）
+  // null=加载中；loadError 可 Retry
+  const [questions, setQuestions] = useState(() => (preselected?.length ? preselected : null))
   const [loadError, setLoadError] = useState(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
 
@@ -90,13 +94,14 @@ export default function Record() {
   const [prevLoadKey, setPrevLoadKey] = useState(loadKey)
   if (prevLoadKey !== loadKey) {
     setPrevLoadKey(loadKey)
-    setQuestions(null)
+    setQuestions(preselected?.length ? preselected : null)
     setLoadError(null)
   }
 
-  // 拉题目（真接口/离线 mock 由 lib 层 flag 决定）
+  // 选题页带来已选题时直用（上方 state 初始化/重置已注入），不再请求；
+  // 否则走接口随机抽样（直链 /record 或刷新丢 state 的兜底降级，handoff 016）。
   useEffect(() => {
-    if (!validEntry) return
+    if (!validEntry || preselected?.length) return
     let alive = true
     fetchQuestions(subMode).then(
       (qs) => {
@@ -109,7 +114,7 @@ export default function Record() {
     return () => {
       alive = false
     }
-  }, [validEntry, subMode, loadAttempt])
+  }, [validEntry, subMode, loadAttempt, preselected])
 
   const question = questions?.[qIndex]
   const isLast = questions != null && qIndex === questions.length - 1

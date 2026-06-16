@@ -4,9 +4,12 @@ import {
   PART_META,
   USE_LOCAL_QUESTIONS,
   fetchQuestions,
+  fetchTopics,
+  flattenSelectedQuestions,
   getQuestions,
   partParam,
   speechText,
+  topicSelectState,
 } from './questions.js'
 
 // pin 题库 shape 与 GET /questions?part= 契约一致（SCHEMA §6.5）：
@@ -90,5 +93,50 @@ describe('getQuestions / fetchQuestions / speechText', () => {
     expect(p2).toBe(LOCAL_QUESTIONS.p2[0].text)
     expect(p2).not.toContain('You should say')
     expect(speechText(LOCAL_QUESTIONS.p1[0])).toBe(LOCAL_QUESTIONS.p1[0].text)
+  })
+})
+
+describe('选题页（F1，handoff 016）', () => {
+  it('fetchTopics：真接口按契约打 GET /questions/topics?part=（SCHEMA §6.5/PR2）', async () => {
+    const calls = []
+    const origFetch = globalThis.fetch
+    const payload = {
+      part: 'p1',
+      topics: [{ topic_id: 'p1-t01', title: 'Music', questions: LOCAL_QUESTIONS.p1 }],
+    }
+    globalThis.fetch = async (url) => {
+      calls.push(String(url))
+      return { ok: true, status: 200, json: async () => payload }
+    }
+    try {
+      const d = await fetchTopics('module_p1')
+      expect(calls).toEqual(['/api/questions/topics?part=p1'])
+      expect(d).toBe(payload)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('fetchTopics：sub_mode 非法 resolve null（不发请求）', async () => {
+    await expect(fetchTopics('exam')).resolves.toBeNull()
+    await expect(fetchTopics(undefined)).resolves.toBeNull()
+  })
+
+  it('topicSelectState：none / some(半选) / all', () => {
+    const topic = { questions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }
+    expect(topicSelectState(topic, new Set())).toBe('none')
+    expect(topicSelectState(topic, new Set(['a']))).toBe('some')
+    expect(topicSelectState(topic, new Set(['a', 'b']))).toBe('some')
+    expect(topicSelectState(topic, new Set(['a', 'b', 'c']))).toBe('all')
+  })
+
+  it('flattenSelectedQuestions：按 topic→题 原序展开已选（非勾选顺序）', () => {
+    const topics = [
+      { questions: [{ id: 'a', text: 'A' }, { id: 'b', text: 'B' }] },
+      { questions: [{ id: 'c', text: 'C' }] },
+    ]
+    const out = flattenSelectedQuestions(topics, new Set(['c', 'a']))
+    expect(out.map((q) => q.id)).toEqual(['a', 'c'])
+    expect(out[0].text).toBe('A') // 返回完整题目对象（带 text/bullets/tts_url）
   })
 })

@@ -64,7 +64,7 @@ export default function IeltsSelect() {
               <li key={p.value}>
                 <Link
                   className="transition-colors duration-150 hover:text-accent-bright"
-                  to={`/record?mode=${MODE_IELTS}&sub_mode=${p.value}`}
+                  to={`/ielts/select?mode=${MODE_IELTS}&sub_mode=${p.value}`}
                 >
                   {p.label} · {p.desc}
                 </Link>

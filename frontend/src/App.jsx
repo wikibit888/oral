@@ -3,6 +3,7 @@ import Home from './routes/Home.jsx'
 import Practice from './routes/Practice.jsx'
 import IeltsSelect from './routes/IeltsSelect.jsx'
 import ScenarioSelect from './routes/ScenarioSelect.jsx'
+import RecordSelect from './routes/RecordSelect.jsx'
 import Record from './routes/Record.jsx'
 import Report from './routes/Report.jsx'
 import Library from './routes/Library.jsx'
@@ -83,6 +84,7 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/practice" element={<Practice />} />
           <Route path="/ielts" element={<IeltsSelect />} />
+          <Route path="/ielts/select" element={<RecordSelect />} />
           <Route path="/scenario" element={<ScenarioSelect />} />
           <Route path="/record" element={<Record />} />
           <Route path="/report/:sessionId" element={<Report />} />

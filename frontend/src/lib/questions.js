@@ -82,3 +82,48 @@ export async function fetchQuestions(subMode) {
 export function speechText(q) {
   return q.text
 }
+
+// —— 选题页（F1，handoff 016）—— //
+
+// mock 模式把本地题库包成单一 topic（shape 同 /questions/topics 契约），离线也能渲染
+function localTopics(part) {
+  return {
+    part,
+    topics: [
+      {
+        topic_id: `mock-${part}`,
+        title: PART_META[part]?.topic ?? part,
+        questions: LOCAL_QUESTIONS[part],
+      },
+    ],
+  }
+}
+
+// 拉取该 Part **全量**题目按 topic 分组（GET /questions/topics?part=，SCHEMA §6.5/PR2）。
+// 真接口返回 {part, topics:[{topic_id, title, questions:[{id,part,text,bullets?,tts_url}]}]}；
+// mock 模式回 localTopics（同 shape）。sub_mode 非法 resolve null（不发请求）。
+export async function fetchTopics(subMode) {
+  const part = partParam(subMode)
+  if (!part) return null
+  if (USE_LOCAL_QUESTIONS) return localTopics(part)
+  return request(`/questions/topics?part=${part}`)
+}
+
+// 话题整体勾选态：none / some(半选) / all —— 驱动 topic 级 checkbox 的 indeterminate
+export function topicSelectState(topic, selectedSet) {
+  const ids = topic.questions.map((q) => q.id)
+  const picked = ids.filter((id) => selectedSet.has(id)).length
+  if (picked === 0) return 'none'
+  return picked === ids.length ? 'all' : 'some'
+}
+
+// 已选题展开为有序题目数组（保持 topic→题 原序，非勾选顺序），喂给 /record 录音队列
+export function flattenSelectedQuestions(topics, selectedSet) {
+  const out = []
+  for (const t of topics) {
+    for (const q of t.questions) {
+      if (selectedSet.has(q.id)) out.push(q)
+    }
+  }
+  return out
+}

@@ -66,7 +66,8 @@ export default function Record() {
   // intro → starting → 每题 reading →（p2: prep 备题）→ recording ⇄ paused
   //   → advancing（Next 上传）| submitting（Get Review）→ 跳 /report/{id}
   // error 是可重试态（retryRef 记住失败的动作）。
-  const [phase, setPhase] = useState('intro')
+  // 选题页带 preselected 进来时跳过 intro（无二次 Start），直接 starting → 自动建会话
+  const [phase, setPhase] = useState(() => (preselected?.length ? 'starting' : 'intro'))
   const [qIndex, setQIndex] = useState(0)
   const [error, setError] = useState(null)
   const [elapsed, setElapsed] = useState(0)
@@ -79,6 +80,7 @@ export default function Record() {
   const [loadAttempt, setLoadAttempt] = useState(0)
 
   const sessionRef = useRef(null) // session_id（POST /sessions 返回）
+  const autoStartRef = useRef(false) // 选题页进来自动建会话一次（防 StrictMode 双挂载重入）
   const prepDoneRef = useRef(false) // 备题只收口一次（到点与 I'm ready 先到先得）
   const recorderRef = useRef(null)
   const pendingRef = useRef(null) // 停录待上传的 {blob, questionId}；上传失败 Retry 复用
@@ -251,6 +253,16 @@ export default function Record() {
     if (!aliveRef.current) return
     runQuestion(0)
   }
+
+  // 选题页直接进流程（无二次 Start，handoff 016 调整）：preselected 到位即自动建会话跑首题。
+  // autoStartRef 防重入（含 StrictMode 双挂载——begin 的 create 在双挂载稳定后 resolve、
+  // aliveRef 已回 true，runQuestion 正常执行）；建会话失败落 begin 的 error 态可 Retry。
+  useEffect(() => {
+    if (autoStartRef.current || !preselected?.length || !questions?.length) return
+    autoStartRef.current = true
+    begin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- begin 每渲染重建但行为稳定；autoStartRef 防重入
+  }, [preselected, questions])
 
   // 停录并暂存 blob；已停过则 no-op（上传失败 Retry 不重复 stop）
   const stopAndStash = async () => {

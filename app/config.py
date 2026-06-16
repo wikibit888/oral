@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # judge 用的多模态模型（结构化输出 + 听音频判发音）
     judge_model: str = "gemini-2.5-flash"
 
+    # judge 思考预算（token）：0=关闭思考（默认，省课后首字延迟）  -1=自动  正值=固定档。
+    # 2.5-flash 允许 0；temp=0 grounded judge 关思考不引漂移。留开关便于 A/B 与一键回滚。
+    judge_thinking_budget: int = 0
+
     # 实时对话用的 Live 模型（WS 双向音频流：16k PCM 上行 / 24k PCM 下行）
     live_model: str = "gemini-3.1-flash-live-preview"
 

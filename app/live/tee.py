@@ -2,8 +2,8 @@
 
 时钟 = 累计用户音频字节推导的流位置（16k/16-bit/mono → 32000 B/s）：上行帧
 到达即推进流位置，轮次事件发生时记当前位置切片——全程一个时钟，免转码直写 WAV。
-切片落地即后台 whisper 转写 + Files API 预上传（ingest_clip），end_session 后
-finalize 只剩一次 judge——这正是 live 会话报告 ≤5s 的前提。
+切片落地即后台 whisper 转写（持锁串行）+ Files API 预上传（脱锁并发），end_session
+后 finalize 只剩一次 judge——这正是 live 会话报告 ≤5s 的前提。
 
 地板（floor）状态机决定哪些帧进切片（与 merge_transcripts 语义对齐：考官说话
 时段不在任何切片里，切片内静默 = 用户真实犹豫）：
@@ -13,15 +13,17 @@ finalize 只剩一次 judge——这正是 live 会话报告 ≤5s 的前提。
 - interrupted（barge-in）→ 地板归还用户，并把预缓冲（考官说话期间的近段
   麦克风帧）接回切片头——用户打断的起头发生在事件到达之前，不回补会掉词。
 
-钩子全部在事件循环内同步调用、只动内存；阻塞活（写盘 + whisper + 上传）经
-asyncio.to_thread 后台串行执行（whisper 模型是进程内单例，不并发喂）。
+钩子全部在事件循环内同步调用、只动内存；阻塞活经 asyncio.to_thread 后台执行：
+写盘 + whisper 转写持 _ingest_lock 串行（whisper 模型是进程内单例，不并发喂），
+Files API 上传脱锁并发（多切片网络往返不再串在 whisper 之后）。
 """
 
 import asyncio
 import logging
 from collections import deque
 
-from app.pipeline import ingest_clip
+from app.models import Transcript
+from app.pipeline import finalize_clip, transcribe_clip
 from app.storage import save_clip
 
 logger = logging.getLogger(__name__)
@@ -141,20 +143,48 @@ class UserAudioTee:
         task.add_done_callback(self._ingest_tasks.remove)  # 完成即回收句柄
 
     async def _ingest(self, pcm: bytes, seq: int, start_ts: float, end_ts: float) -> None:
-        async with self._ingest_lock:
-            await asyncio.to_thread(self._ingest_sync, pcm, seq, start_ts, end_ts)
-
-    def _ingest_sync(self, pcm: bytes, seq: int, start_ts: float, end_ts: float) -> None:
-        # 单个切片失败只损失该回合的评测素材，不拖垮会话/其余切片
+        """一个切片的完整生命周期（转写 → 上传 → 收口）都在本 task 内 await——drain 才能
+        等齐（绝不把上传甩成 fire-and-forget，否则末轮 file_uri 漏空）。whisper 单例只
+        串行「转写段」（持锁）；「上传/收口段」脱锁、多切片可并发。任一段失败只损失该
+        回合素材，不拖垮会话/其余切片。
+        """
+        transcribed = await self._transcribe_locked(pcm, seq, start_ts, end_ts)
+        if transcribed is None:                       # 转写段已失败（已记日志）
+            return
+        turn_id, path, transcript = transcribed
         try:
-            path = save_clip(self.session_id, seq, pcm)
-            ingest_clip(
-                self.session_id,
-                path,
-                start_ts=round(start_ts, 3),
-                end_ts=round(end_ts, 3),
-            )
+            await asyncio.to_thread(finalize_clip, turn_id, path, transcript)
         except Exception:
             logger.exception(
-                "tee 切片 ingest 失败: session=%s seq=%s", self.session_id, seq
+                "tee 切片上传/收口失败: session=%s seq=%s", self.session_id, seq
             )
+
+    async def _transcribe_locked(
+        self, pcm: bytes, seq: int, start_ts: float, end_ts: float
+    ) -> tuple[int, str, Transcript] | None:
+        """转写段：whisper 单例不并发喂——写盘 + create_turn + 转写全程持 _ingest_lock
+        串行。create_turn 在锁内按 seq 顺序分配 turns.id（merge_transcripts 依赖 id 序），
+        不被并发打乱。失败返回 None（已记日志），上层跳过上传段。
+        """
+        async with self._ingest_lock:
+            try:
+                return await asyncio.to_thread(
+                    self._transcribe_sync, pcm, seq, start_ts, end_ts
+                )
+            except Exception:
+                logger.exception(
+                    "tee 切片转写失败: session=%s seq=%s", self.session_id, seq
+                )
+                return None
+
+    def _transcribe_sync(
+        self, pcm: bytes, seq: int, start_ts: float, end_ts: float
+    ) -> tuple[int, str, Transcript]:
+        path = save_clip(self.session_id, seq, pcm)
+        turn_id, transcript = transcribe_clip(
+            self.session_id,
+            path,
+            start_ts=round(start_ts, 3),
+            end_ts=round(end_ts, 3),
+        )
+        return turn_id, path, transcript

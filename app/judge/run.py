@@ -4,8 +4,8 @@
 - temperature=0 + 结构化输出（response_schema=JudgeReport，P1 收口：LLM 只产出
   dimensions + 诊断层；practice_summary / overall_band / unscorable* /
   vocabulary_diversity_pct 全部由系统确定性设置或回填）；
-- 雅思额外喂音频切片让模型听发音判可懂度——只挑 **2–3 段最长用户切片**
-  （SCHEMA §3），优先引用 Files API 预上传的 file URI（省掉课后上传大音频），
+- 雅思额外喂音频切片让模型听发音判可懂度——只挑 **最长的 2 段用户切片**
+  （MAX_PRONUNCIATION_CLIPS，SCHEMA §3），优先引用 Files API 预上传的 file URI（省掉课后上传大音频），
   无 URI 时回退 inline bytes；情景只走文字诊断；
 - overall_band 由系统按四维确定性聚合（judge 不自算；信号≠成绩）；
 - 数字 band 只在雅思方式 A（sub_mode=exam）：方式 B（module_pX）四维仅作内部
@@ -16,6 +16,7 @@
 """
 
 import logging
+import random
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -43,12 +44,14 @@ logger = logging.getLogger(__name__)
 UNSCORABLE_REASON = "无法评分：未检出可评的英语口语内容（可能是静音、非英语或录音问题），请重录后再试。"
 
 # judge 判发音只喂最长的 N 段用户切片（SCHEMA §3：不喂全程音频）。
-MAX_PRONUNCIATION_CLIPS = 3
+MAX_PRONUNCIATION_CLIPS = 2
 
 AUDIO_MIME = "audio/wav"
 
 # judge 上游 5xx（联调多次实测 503 高负载）按此退避重试；temp=0 重试无副作用。
+# 每次退避叠加 [0, JUDGE_RETRY_JITTER_S) 随机抖动，避免并发重试同时撞上游（thundering herd）。
 JUDGE_RETRY_BACKOFF_S = (2, 5)
+JUDGE_RETRY_JITTER_S = 1.0
 
 _genai_client: genai.Client | None = None
 
@@ -87,13 +90,18 @@ def _generate_with_retry(contents: list) -> types.GenerateContentResponse:
                     temperature=0,
                     response_mime_type="application/json",
                     response_schema=JudgeReport,
+                    # 关思考省课后首字延迟（可配置：0=关 / -1=自动 / 正值=固定档）。
+                    thinking_config=types.ThinkingConfig(
+                        thinking_budget=settings.judge_thinking_budget
+                    ),
                 ),
             )
         except errors.ServerError as e:
             if backoff is None:
                 raise
-            logger.warning("judge 上游 5xx，%ss 后重试：%r", backoff, e)
-            time.sleep(backoff)
+            delay = backoff + random.uniform(0, JUDGE_RETRY_JITTER_S)
+            logger.warning("judge 上游 5xx，%.2fs 后重试：%r", delay, e)
+            time.sleep(delay)
 
 
 def upload_clip(path: str) -> str | None:
@@ -165,7 +173,7 @@ def run_judge(
     )
 
     contents: list = [prompt]
-    # 雅思才喂音频（声学判发音可懂度），且只喂 2–3 段最长切片；情景只走文字诊断。
+    # 雅思才喂音频（声学判发音可懂度），且只喂最长的 2 段切片；情景只走文字诊断。
     if mode == "ielts":
         if clips:
             for clip in select_pronunciation_clips(clips):

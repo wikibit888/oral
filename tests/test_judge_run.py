@@ -112,6 +112,7 @@ def test_ielts_temp0_schema_and_aggregation(monkeypatch):
     cfg = fake.models.last["config"]
     assert cfg.temperature == 0
     assert cfg.response_schema is JudgeReport
+    assert cfg.thinking_config.thinking_budget == 0     # 关思考省课后延迟（默认配置）
     assert isinstance(rep, Report)
     assert rep.overall_band == 6.5                       # 系统聚合
     assert rep.practice_summary.sessions == 1            # 系统事实值，非 LLM 产出
@@ -136,7 +137,7 @@ def test_ielts_snaps_dimension_bands_to_half(monkeypatch):
     assert rep.overall_band == 6.5                        # snapped 均值 6.25 → 6.5
 
 
-# —— 音频切片（P1：只喂 2–3 段最长，优先 file URI）—— #
+# —— 音频切片（P1：只喂最长 2 段，优先 file URI）—— #
 def _wav(tmp_path, name="a.wav"):
     p = tmp_path / name
     p.write_bytes(b"RIFFxxxxWAVE")
@@ -146,10 +147,10 @@ def _wav(tmp_path, name="a.wav"):
 def test_select_pronunciation_clips_picks_longest():
     clips = [AudioClip(path=f"/c{i}.wav", duration_s=d) for i, d in enumerate([3.0, 9.0, 1.0, 7.0, 5.0])]
     picked = judge_run.select_pronunciation_clips(clips)
-    assert [c.duration_s for c in picked] == [9.0, 7.0, 5.0]
+    assert [c.duration_s for c in picked] == [9.0, 7.0]   # 最长的 MAX_PRONUNCIATION_CLIPS=2 段
 
 
-def test_ielts_feeds_at_most_three_longest_clips(monkeypatch, tmp_path):
+def test_ielts_feeds_at_most_two_longest_clips(monkeypatch, tmp_path):
     fake = _patch(monkeypatch, _judged(_dims()))
     clips = [
         AudioClip(path=_wav(tmp_path, f"c{i}.wav"), duration_s=float(i + 1))
@@ -157,7 +158,7 @@ def test_ielts_feeds_at_most_three_longest_clips(monkeypatch, tmp_path):
     ]
     judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, clips=clips)
     contents = fake.models.last["contents"]
-    assert len(contents) == 1 + 3                        # prompt + 3 段最长切片
+    assert len(contents) == 1 + 2                        # prompt + 2 段最长切片
 
 
 def test_clip_part_prefers_file_uri_over_bytes(monkeypatch, tmp_path):

@@ -101,7 +101,9 @@ def no_finalize(monkeypatch):
     """默认掐掉课后 finalize 与切片 ingest（真实现要跑 whisper/judge）；专项测试自行覆盖。"""
     monkeypatch.setattr("app.api.live_ws.finalize_session", lambda session_id, **kw: None)
     monkeypatch.setattr("app.live.tee.save_clip", lambda sid, seq, pcm: f"/fake/{sid}_{seq}.wav")
-    monkeypatch.setattr("app.live.tee.ingest_clip", lambda *a, **kw: None)
+    # PR-1b 后 tee 分两段：转写段（返回 turn_id, transcript）+ 收口段，均打桩为 no-op
+    monkeypatch.setattr("app.live.tee.transcribe_clip", lambda *a, **kw: (0, None))
+    monkeypatch.setattr("app.live.tee.finalize_clip", lambda *a, **kw: None)
     yield
     # 模块级任务集是跨测试的进程态，清掉防慢任务句柄漏到下个用例（review S3）
     live_ws_module._background_tasks.clear()
@@ -779,16 +781,22 @@ def test_live_clips_ingested_then_finalized(client, monkeypatch):
         pcm_by_path[path] = pcm
         return path
 
-    def fake_ingest(session_id, path, *, role="user", start_ts=None, end_ts=None):
-        order.append("ingest")
+    def fake_transcribe_clip(session_id, path, *, role="user", start_ts=None, end_ts=None):
         clips.append((len(pcm_by_path[path]), start_ts, end_ts))
+        return 0, None                             # (turn_id, transcript)
+
+    def fake_finalize_clip(turn_id, clip_path, transcript):
+        # 收口段（脱锁并发）是切片生命周期末段：记于此即验证 drain 必等齐上传/收口
+        # 才放行 session finalize（PR-1b drain 红线：不 fire-and-forget upload）。
+        order.append("ingest")
 
     def fake_finalize(session_id, live_feedback=None):
         order.append("finalize")
         finalize_done.set()
 
     monkeypatch.setattr("app.live.tee.save_clip", fake_save)
-    monkeypatch.setattr("app.live.tee.ingest_clip", fake_ingest)
+    monkeypatch.setattr("app.live.tee.transcribe_clip", fake_transcribe_clip)
+    monkeypatch.setattr("app.live.tee.finalize_clip", fake_finalize_clip)
     monkeypatch.setattr("app.api.live_ws.finalize_session", fake_finalize)
 
     half_sec = b"\x01" * 16000  # 0.5s @ 16k/16-bit/mono

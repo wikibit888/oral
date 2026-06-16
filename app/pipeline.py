@@ -34,9 +34,31 @@ def ingest_clip(
 ) -> int:
     """增量消化一个切片：转写（词级时间戳）+ Files API 预上传，产物挂 turns 行。
 
-    同步函数：会话内逐切片由 BackgroundTasks / 线程池执行（whisper 是 CPU 阻塞活），
-    与对话互不阻塞。预上传失败只降级（file_uri=NULL，judge 回退 inline bytes），
-    不让会话失败。返回 turn id。
+    同步全流程入口（方式 B 单题 / 测试用）。Live 路径不走这里——它需要把转写段
+    与上传段拆开分别控制锁粒度（whisper 串行、上传并发），故 tee 直接调
+    transcribe_clip + finalize_clip 两段（本函数即这两段的顺序组合）。
+    预上传失败只降级（file_uri=NULL，judge 回退 inline bytes），不让会话失败。返回 turn id。
+    """
+    turn_id, transcript = transcribe_clip(
+        session_id, clip_path, role=role, start_ts=start_ts, end_ts=end_ts,
+    )
+    finalize_clip(turn_id, clip_path, transcript)
+    return turn_id
+
+
+def transcribe_clip(
+    session_id: str,
+    clip_path: str,
+    *,
+    role: str = "user",
+    start_ts: float | None = None,
+    end_ts: float | None = None,
+) -> tuple[int, Transcript]:
+    """切片消化的「转写段」：建 turn 行 + whisper 词级时间戳转写，返回 (turn_id, transcript)。
+
+    whisper 是 CPU 阻塞活、进程内单例不可并发喂——Live 路径把本段置于 _ingest_lock
+    下串行执行，create_turn 也在锁内按 seq 顺序分配 turns.id（merge_transcripts 依赖
+    id 序）。上传 + 落库由 finalize_clip 承接，可脱锁并发。
     """
     if crud.get_session(session_id) is None:
         raise ValueError(f"session 不存在: {session_id}")
@@ -46,6 +68,16 @@ def ingest_clip(
         start_ts=start_ts, end_ts=end_ts,
     )
     transcript = transcribe(clip_path)
+    return turn_id, transcript
+
+
+def finalize_clip(turn_id: int, clip_path: str, transcript: Transcript) -> None:
+    """切片消化的「上传/收口段」：Files API 预上传 + 转写产物落 turn 行。
+
+    与转写解耦——上传是网络 IO、无单例约束，移出 _ingest_lock 让多切片上传并发，
+    不再被串在 whisper 之后。drain 仍等齐：调用方须在同一 _ingest task 内 await 本段
+    （绝不 fire-and-forget），否则末轮 file_uri 漏空。预上传失败降级 file_uri=NULL。
+    """
     file_uri = upload_clip(clip_path)
     crud.finish_turn(
         turn_id,
@@ -53,7 +85,6 @@ def ingest_clip(
         transcript_json=transcript_to_json(transcript),
         file_uri=file_uri,
     )
-    return turn_id
 
 
 def finalize_session(

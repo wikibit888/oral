@@ -4,7 +4,10 @@
 // processing 期间附 stage ∈ transcribe → signals → judge（SCHEMA §6）。
 // failed 是系统错误终态，文案「处理失败，请重试」（不是「请重录」—— 录音本身没问题）。
 
-export const POLL_INTERVAL_MS = 2500
+// 处理态轮询间隔。首轮 tick 立即触发（零首延迟，见 Report.jsx），故此值只决定
+// 「报告就绪 → 前端发现」的尾延迟上界：1200ms 把上界从 2.5s 压到 ~1.2s。后端只是
+// SQLite 单主键查（reports.py），此 QPS 无压力；更小则空轮询边际递增、收益不抵。
+export const POLL_INTERVAL_MS = 1200
 
 // status → 下一步动作：continue（继续轮询）/ done（切报告态）/ failed（终态文案）
 // / unknown（契约外，当错误展示，防后端新增状态时前端死轮询）。

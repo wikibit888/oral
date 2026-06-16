@@ -16,7 +16,12 @@ HALF_SEC = b"\x01" * (BYTES_PER_SECOND // 2)   # 0.5s 帧
 
 @pytest.fixture
 def ingested(monkeypatch):
-    """打桩切片落盘 + ingest，返回记录列表 [(seq, n_bytes, start_ts, end_ts)]。"""
+    """打桩切片落盘 + 转写段 + 收口段，返回记录列表 [(seq, n_bytes, start_ts, end_ts)]。
+
+    PR-1b 后 tee 不再调 ingest_clip，而是分两段：transcribe_clip（持锁串行，记录于此）
+    + finalize_clip（脱锁并发，无副作用打桩）。记录在转写段——它在锁内按 seq 顺序执行，
+    故 calls 顺序即切片 seq 序。
+    """
     calls: list[tuple] = []
     pcm_by_path: dict[str, bytes] = {}
 
@@ -25,12 +30,17 @@ def ingested(monkeypatch):
         pcm_by_path[path] = pcm
         return path
 
-    def fake_ingest(session_id, path, *, role="user", start_ts=None, end_ts=None):
+    def fake_transcribe_clip(session_id, path, *, role="user", start_ts=None, end_ts=None):
         seq = int(path.rsplit("turn", 1)[1].split(".")[0])
         calls.append((seq, len(pcm_by_path[path]), start_ts, end_ts))
+        return seq, None                  # (turn_id, transcript)——收口段不校验内容
+
+    def fake_finalize_clip(turn_id, clip_path, transcript):
+        pass
 
     monkeypatch.setattr(tee_module, "save_clip", fake_save)
-    monkeypatch.setattr(tee_module, "ingest_clip", fake_ingest)
+    monkeypatch.setattr(tee_module, "transcribe_clip", fake_transcribe_clip)
+    monkeypatch.setattr(tee_module, "finalize_clip", fake_finalize_clip)
     return calls
 
 
@@ -182,11 +192,12 @@ def test_finish_idempotent_and_gates_hooks(ingested):
     assert ingested == [(0, BYTES_PER_SECOND // 2, 0.0, 0.5)]
 
 
-def test_ingest_failure_swallowed(ingested, monkeypatch, caplog):
+def test_transcribe_failure_swallowed(ingested, monkeypatch, caplog):
+    # 转写段（持锁）失败：吞掉并记日志，不拖垮会话，且不进入上传段
     def boom(*args, **kwargs):
         raise RuntimeError("whisper 炸了")
 
-    monkeypatch.setattr(tee_module, "ingest_clip", boom)
+    monkeypatch.setattr(tee_module, "transcribe_clip", boom)
 
     async def scenario():
         t = UserAudioTee("s1")
@@ -195,4 +206,21 @@ def test_ingest_failure_swallowed(ingested, monkeypatch, caplog):
         await t.drain()                    # 不抛——单切片失败不拖垮会话
 
     asyncio.run(scenario())
-    assert "tee 切片 ingest 失败" in caplog.text
+    assert "tee 切片转写失败" in caplog.text
+
+
+def test_finalize_failure_swallowed(ingested, monkeypatch, caplog):
+    # 上传/收口段（脱锁）失败：同样吞掉并记日志，不拖垮会话/其余切片
+    def boom(*args, **kwargs):
+        raise RuntimeError("上传炸了")
+
+    monkeypatch.setattr(tee_module, "finalize_clip", boom)
+
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_model_audio()
+        await t.drain()
+
+    asyncio.run(scenario())
+    assert "tee 切片上传/收口失败" in caplog.text

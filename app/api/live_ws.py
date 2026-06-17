@@ -23,9 +23,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import random
 
 from app import crud
-from app.api.questions import _load_bank
 from app.live.bridge import bridge
 from app.live.client import connect_live
+from app.live.exam_select import pick_exam_set
 from app.live.director import (
     EXAMINER_SYSTEM_INSTRUCTION,
     EXAMINER_VOICES,
@@ -162,10 +162,16 @@ async def live_ws(websocket: WebSocket) -> None:
             tool_handler = None
             nudger = None
             if sub_mode == "exam":
+                # 以 topic 为子单位组卷（F2）：P1 跨 2–3 话题题组 + P2 单卡 + 同话题 P3
+                # 追问。p2_card 即旧 _pick_cue_card 的 cue card（路径不变）；P1/P3 题作
+                # 舞台指令注入考官，开场前/进 P3 时各注一次（考官逐题问、可改写）。
+                exam_set = pick_exam_set()
                 # 考官名 = 本场音色对应名（注册表外的自定义 LIVE_VOICE 直接用音色名）
                 director = IeltsDirector(
-                    _pick_cue_card(),
+                    exam_set["p2_card"],
                     examiner_name=EXAMINER_VOICES.get(voice, voice),
+                    p1_questions=exam_set["p1_questions"],
+                    p3_questions=exam_set["p3_questions"],
                 )
                 await director.start(websocket, live_session)
             elif mode == "scenario":
@@ -211,11 +217,6 @@ async def live_ws(websocket: WebSocket) -> None:
             _schedule_orphan_cleanup(session_id)
         with suppress(Exception):
             await websocket.close()
-
-
-def _pick_cue_card() -> dict:
-    """从题库 p2 随机抽一张 cue card（静态精选库 8 张，IELTS.md §2）。"""
-    return random.choice(_load_bank()["p2"])
 
 
 def _pick_opener(case: str) -> str:

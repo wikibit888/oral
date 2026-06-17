@@ -769,3 +769,87 @@ def test_bridge_processes_interrupted_before_turn_complete_same_response():
     assert d.state == "p1" and d._pending is None     # 打断清掉 pending，没转场
     kinds = [e["type"] for e in ws.events]
     assert kinds == ["interrupted", "turn_complete"]
+
+
+# —— F2 抽题注入（P1 题池 开场后注入 / P3 追问 进 P3 注入；默认 None 向后兼容）—— #
+
+P1_QS = [
+    {"id": "s-p1-t02-q01", "text": "Where is your hometown?", "topic_id": "t02"},
+    {"id": "s-p1-t05-q03", "text": "Do you enjoy cooking?", "topic_id": "t05"},
+]
+P3_QS = [
+    {"id": "s-p3-t01-q01", "text": "Why do people change jobs?"},
+    {"id": "s-p3-t01-q02", "text": "How has work changed over time?"},
+]
+
+
+def test_p1_questions_injected_after_opening():
+    # P1 题池注入在开场指令之后、Part 1 问开始前就位；逐题文本进入私有舞台指令，
+    # 但绝不当清单整段念（含 do NOT read 守则）
+    d = IeltsDirector(CARD, p1_questions=P1_QS)
+    ws, sess = FakeWs(), FakeSession()
+    asyncio.run(d.start(ws, sess))
+    # 开场指令仍是第一条；题池是其后独立一条
+    assert "full name" in sess.directions[0]
+    pool_directions = [t for t in sess.directions if "Where is your hometown?" in t]
+    assert len(pool_directions) == 1
+    inj = pool_directions[0]
+    assert "Do you enjoy cooking?" in inj         # 两题都进了
+    assert "1)" in inj and "2)" in inj            # 编号列表形态
+    assert "not read this list aloud" in inj.lower()   # 逐题问、不整段念
+    assert "Part 1" in inj
+    d.cancel_timers()
+
+
+def test_p1_questions_absent_keeps_single_opening_direction():
+    # 向后兼容：不传 p1_questions → 不注入题池，开场仍只一条指令（既有行为不变）
+    d = IeltsDirector(CARD)                       # 无新参
+    ws, sess = FakeWs(), FakeSession()
+    asyncio.run(d.start(ws, sess))
+    assert len(sess.directions) == 1
+    d.cancel_timers()
+
+
+def test_p3_questions_injected_on_enter_p3():
+    # P3 追问池在进 P3 时注入：逐题文本进舞台指令，标注"同 Part 2 话题"（延伸 P2）
+    d = IeltsDirector(CARD, p3_questions=P3_QS)
+    ws, sess = FakeWs(), FakeSession()
+    d.state = "p2_talk"
+
+    async def run():
+        await _spoken_turn(
+            d, ws, sess,
+            "Thank you. I would now like to discuss some more general questions. "
+            "Why do people work?",
+        )
+
+    asyncio.run(run())
+    assert d.state == "p3"
+    inj = [t for t in sess.directions if "Why do people change jobs?" in t]
+    assert len(inj) == 1
+    assert "How has work changed over time?" in inj[0]
+    assert "Part 2 topic" in inj[0]               # 延伸 P2 话题
+    assert "do NOT read this list aloud" in inj[0]
+    d.cancel_timers()
+
+
+def test_p3_questions_absent_injects_nothing_on_enter_p3():
+    # 向后兼容：不传 p3_questions → 进 P3 不注入任何题池指令（考官即兴）
+    d = IeltsDirector(CARD)
+    ws, sess = FakeWs(), FakeSession()
+    d.state = "p2_talk"
+    asyncio.run(
+        _spoken_turn(
+            d, ws, sess,
+            "Thank you. I would now like to discuss some more general questions. Why?",
+        )
+    )
+    assert d.state == "p3"
+    assert sess.directions == []                  # 进 p3 没有任何注入
+    d.cancel_timers()
+
+
+def test_empty_question_pool_renders_empty():
+    # _format_question_pool：None / 空列表 → 空串（调用方据此跳过注入）
+    assert director_module._format_question_pool(None) == ""
+    assert director_module._format_question_pool([]) == ""

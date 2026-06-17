@@ -169,9 +169,10 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
     assert row["mode"] == "ielts"
     assert row["sub_mode"] == "exam"     # ielts_a ↦ mode=ielts + sub_mode=exam
     assert row["scenario_case"] is None
-    # 方式 A 注入中立考官 persona + 导演开场提示已发给 Live
+    # 方式 A 注入中立考官 persona + 导演开场提示已发给 Live。F2 抽题接线后开场起
+    # 两条指令：[0] 开场（greet+问名），[1] P1 跨话题题池（真库恒有 P1 题）。
     assert session.system_instruction is not None and "examiner" in session.system_instruction
-    assert len(session.directions) == 1
+    assert len(session.directions) == 2
     assert session.tools is None         # 考官无 tools：中立零破壁
     # 接缝断言（review W1）：随机音色穿透到连接层且来自注册表；
     # 开场指令自报的名字与该音色同源（注册表派生）
@@ -179,6 +180,9 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
     assert session.voice in EXAMINER_VOICES
     opening = session.directions[0].parts[0].text
     assert f'introduce yourself as "{EXAMINER_VOICES[session.voice]}"' in opening
+    # F2 接线：第二条是 P1 题池（编号列表 + 不整段念守则）
+    p1_pool = session.directions[1].parts[0].text
+    assert "For Part 1" in p1_pool and "1)" in p1_pool
 
 
 def test_ielts_a_forces_natural_even_if_ptt_requested(client, monkeypatch):
@@ -379,8 +383,9 @@ def test_ielts_a_nudge_ignored(client, monkeypatch):
         ws.send_text(json.dumps({"type": "nudge", "stage": 3}))
         ws.send_text(json.dumps({"type": "end_session"}))
 
-    # 只有导演开场指令，nudge 未注入任何东西
-    assert len(session.directions) == 1
+    # 只有导演启动指令（开场 + F2 的 P1 题池两条），nudge 未注入任何东西
+    assert len(session.directions) == 2
+    assert "For Part 1" in session.directions[1].parts[0].text
 
 
 def test_scenario_opener_randomly_picked_from_registry(client, monkeypatch):

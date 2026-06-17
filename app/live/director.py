@@ -263,6 +263,32 @@ _CLOSING_FORCE_PROMPT = (
     "[Stage direction: End the exam now by saying \"Thank you. That is the end of the "
     "speaking test.\" and then stop. Do not ask any more questions.]"
 )
+# —— F2 抽题注入（方括号 = 考官不读出，逐题问、可改写，绝不当清单整段念）—— #
+# P1 题池：开场指令之后注入（Part 1 开始前就位）。考官从这组里逐个问、可自然改写，
+# 不是逐字念清单。题量/话题由 exam_select 跨 2–3 话题抽到 8–10 个。
+_P1_POOL_TEMPLATE = (
+    "[For Part 1, after the name check, draw your everyday questions from this set, asking "
+    "one at a time and waiting for a full answer after each; you may rephrase them naturally "
+    "and need not use them all. Do NOT read this list aloud or mention it: {questions}]"
+)
+# P3 追问池：进 P3 时注入（与 cue card 同话题，满足"P3 延伸 P2 话题"）。同为逐题问、
+# 可改写——考官以这些为蓝本展开同话题的抽象追问，不照单宣读。
+_P3_POOL_TEMPLATE = (
+    "[Part 3 stays on the Part 2 topic. Explore it with follow-ups drawn from these, one at a "
+    "time, and you may rephrase naturally; do NOT read this list aloud or mention it: "
+    "{questions}]"
+)
+
+
+def _format_question_pool(questions: list[dict] | None) -> str:
+    """把题列表渲染成 "1) ... 2) ..." 单行串，供舞台指令模板填槽。
+
+    空/None → 空串（调用方据此跳过注入）。只取每条的 text；id/topic_id 是后端账本，
+    不进考官可见文本。
+    """
+    if not questions:
+        return ""
+    return " ".join(f"{i}) {q['text']}" for i, q in enumerate(questions, start=1))
 
 
 class IeltsDirector:
@@ -275,9 +301,19 @@ class IeltsDirector:
     ②该段超时安全网到点 force_*（兜底，直接转，幂等）。两者经 _set_state 互斥。
     """
 
-    def __init__(self, cue_card: dict, examiner_name: str = "Puck"):
+    def __init__(
+        self,
+        cue_card: dict,
+        examiner_name: str = "Puck",
+        p1_questions: list[dict] | None = None,
+        p3_questions: list[dict] | None = None,
+    ):
         self._card = cue_card
         self._examiner_name = examiner_name   # 本场考官自报姓名（与音色同源）
+        # F2 抽题：P1 跨话题题组（开场后注入）+ P3 同话题追问（进 P3 时注入）。
+        # 默认 None → 不注入，完全向后兼容（既有测试 / 无题库场景照常构造）。
+        self._p1_questions = p1_questions
+        self._p3_questions = p3_questions
         self.state = "p1"
         self.input_paused = False
         self._turn_had_audio = False      # 本轮考官是否真发过声（空轮不推进）
@@ -361,6 +397,11 @@ class IeltsDirector:
         await self._direct(
             session, _OPENING_TEMPLATE.format(name=self._examiner_name)
         )
+        # P1 题池（F2）：开场指令后即注入，Part 1 日常问开始前就位。考官从此组逐题
+        # 问、可改写——空池（无题库）不注入，考官按 persona 自拟，向后兼容。
+        pool = _format_question_pool(self._p1_questions)
+        if pool:
+            await self._direct(session, _P1_POOL_TEMPLATE.format(questions=pool))
         self._opening_task = asyncio.create_task(self._opening_watchdog(session))
         self._arm_fallback(MAX_P1_S, self._force_enter_p2_prep, websocket, session)
 
@@ -557,6 +598,11 @@ class IeltsDirector:
             return
         self._clear_prep()
         await self._set_state(websocket, "p3")
+        # P3 追问池（F2）：进 P3 即注入同话题追问蓝本（与 cue card 同 topic → 延伸 P2）。
+        # 考官以此展开抽象追问、逐题问、可改写——空池（回退库无 part3）不注入，考官即兴。
+        pool = _format_question_pool(self._p3_questions)
+        if pool:
+            await self._direct(session, _P3_POOL_TEMPLATE.format(questions=pool))
         self._arm_fallback(MAX_P3_S, self._force_enter_done, websocket, session)
 
     async def _force_enter_p3(self, websocket, session) -> None:

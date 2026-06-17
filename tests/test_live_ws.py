@@ -181,6 +181,16 @@ def test_session_started_creates_ielts_a_row(client, monkeypatch):
     assert f'introduce yourself as "{EXAMINER_VOICES[session.voice]}"' in opening
 
 
+def test_ielts_a_forces_natural_even_if_ptt_requested(client, monkeypatch):
+    """方式 A 只有 live：即便 query 传 turn=ptt，也按 natural 穿透连接层（B5 契约保证）。"""
+    session = FakeLiveSession(responses=[])
+    _patch_session(monkeypatch, session)
+    with client.websocket_connect("/ws/live?mode=ielts_a&turn=ptt") as ws:
+        assert ws.receive_json()["type"] == "session_started"
+        ws.send_text(json.dumps({"type": "end_session"}))
+    assert session.turn_mode == "natural"
+
+
 def test_ielts_a_voice_pinned_by_config(client, monkeypatch):
     # LIVE_VOICE 非空 → 固定音色穿透（不随机）
     monkeypatch.setattr(settings, "live_voice", "Aoede")

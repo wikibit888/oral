@@ -22,14 +22,17 @@ import asyncio
 import logging
 from collections import deque
 
+from app import crud
 from app.models import Transcript
 from app.pipeline import finalize_clip, transcribe_clip
-from app.storage import save_clip
+from app.storage import save_clip, save_examiner_clip
 
 logger = logging.getLogger(__name__)
 
-BYTES_PER_SECOND = 32000   # 16kHz × 16-bit × mono
+BYTES_PER_SECOND = 32000          # 16kHz × 16-bit × mono（用户上行）
+EXAMINER_BYTES_PER_SECOND = 48000  # 24kHz × 16-bit × mono（考官/AI 下行，dialog 回看）
 MIN_CLIP_SECONDS = 0.4     # 短于此的切片丢弃（VAD 毛刺 / 空地板，不值一次 whisper）
+MIN_EXAMINER_CLIP_SECONDS = 0.2   # 考官切片下限（更小：纯回放、短促应答也保留）
 PREBUFFER_SECONDS = 2.0    # barge-in 回补的预缓冲上限
 
 
@@ -50,6 +53,13 @@ class UserAudioTee:
         self._finished = False
         self._ingest_tasks: list[asyncio.Task] = []
         self._ingest_lock = asyncio.Lock()      # 切片串行 ingest：whisper 单例不并发喂
+        # —— 考官/AI 下行音频按轮捕获（dialog 回看，纯回放、绝不进评测）——
+        # 独立缓冲，不复用用户 _buf/_clip_seq/_ingest_tasks：否则污染评测切片与孤儿判定。
+        self._examiner_buf = bytearray()
+        self._examiner_clip_start = 0.0         # 本考官轮起点（用户 _pos 时钟，与用户轮同轴）
+        self._examiner_text: list[str] = []     # 本考官轮的 output 转写增量
+        self._examiner_seq = 0
+        self._examiner_tasks: list[asyncio.Task] = []   # fire-and-forget；drain 不等它
 
     @property
     def clip_count(self) -> int:
@@ -74,22 +84,41 @@ class UserAudioTee:
                 self._prebuf_bytes -= len(self._prebuf.popleft())
         self._pos += len(data) / BYTES_PER_SECOND
 
-    def on_model_audio(self) -> None:
-        """下行考官音频帧：首帧即地板易手，封当前用户切片（后续帧无操作）。"""
+    def on_model_audio(self, data: bytes | None = None) -> None:
+        """下行考官音频帧：首帧即地板易手、封当前用户切片；并按轮累积考官音频（dialog 回看）。
+
+        data = 该帧 24k PCM 字节（bridge 传入）；None 时只作边界信号（旧调用方/测试假体）。
+        考官音频只回放、不进评测——独立缓冲，不碰用户切片链路。
+        """
         if self._finished:
             return
         if self._user_has_floor:
             self._user_has_floor = False
             self._cut_clip()
+            # 考官开口 = 本考官轮起点（用 _pos 用户时钟，与用户轮同一时间轴 → dialog 正确交错）
+            self._examiner_clip_start = self._pos
+            self._examiner_buf = bytearray()
+            self._examiner_text = []
+        if data is not None:
+            self._examiner_buf += data
+
+    def on_examiner_transcript(self, text: str) -> None:
+        """考官 output 转写增量：考官持地板期间累积进当前考官轮文本（dialog 显示用）。"""
+        if self._finished:
+            return
+        if not self._user_has_floor and text:
+            self._examiner_text.append(text)
 
     def on_turn_complete(self) -> None:
         if self._finished:
             return
+        self._cut_examiner_clip()           # 考官轮结束 → 封考官切片
         self._take_floor(with_prebuffer=False)
 
     def on_interrupted(self) -> None:
         if self._finished:
             return
+        self._cut_examiner_clip()           # barge-in 打断考官 → 封（可能残段，纯回放可接受）
         self._take_floor(with_prebuffer=True)
 
     def finish(self) -> None:
@@ -103,6 +132,9 @@ class UserAudioTee:
         if self._user_has_floor:
             self._user_has_floor = False
             self._cut_clip()
+        else:
+            # 末轮考官还在说（用户没等 turn_complete 直接 End）：封最后一个考官切片
+            self._cut_examiner_clip()
 
     async def drain(self) -> None:
         """等全部切片 ingest 落库——finalize 前必须，否则末轮切片会被漏掉。
@@ -188,3 +220,51 @@ class UserAudioTee:
             end_ts=round(end_ts, 3),
         )
         return turn_id, path, transcript
+
+    # ---- 考官/AI 音频按轮捕获（dialog 回看，纯回放、不进评测）----
+
+    def _cut_examiner_clip(self) -> None:
+        """封当前考官轮：写 24k WAV + 落一条 assistant turn 行（绝不走 ingest_clip）。
+
+        fire-and-forget：任务进 _examiner_tasks（独立于 _ingest_tasks），drain 不等它，
+        保报告 ≤5s。音频太短且无文本则丢（barge-in 毛刺 / 空轮），不留噪声回合。
+        """
+        if self._user_has_floor:
+            return                          # 当前不是考官在说，无可封
+        pcm = bytes(self._examiner_buf)
+        self._examiner_buf = bytearray()
+        text = "".join(self._examiner_text).strip()
+        self._examiner_text = []
+        if len(pcm) < MIN_EXAMINER_CLIP_SECONDS * EXAMINER_BYTES_PER_SECOND and not text:
+            return
+        start = round(self._examiner_clip_start, 3)
+        end = round(self._pos, 3)
+        seq = self._examiner_seq
+        self._examiner_seq += 1
+        task = asyncio.create_task(self._save_examiner(pcm, seq, start, end, text))
+        self._examiner_tasks.append(task)
+        task.add_done_callback(self._examiner_tasks.remove)
+
+    async def _save_examiner(
+        self, pcm: bytes, seq: int, start_ts: float, end_ts: float, text: str
+    ) -> None:
+        # 写盘 + 一次 DB 插入都在线程里跑（DB/IO 阻塞活），不阻塞事件循环。
+        await asyncio.to_thread(self._save_examiner_sync, pcm, seq, start_ts, end_ts, text)
+
+    def _save_examiner_sync(
+        self, pcm: bytes, seq: int, start_ts: float, end_ts: float, text: str
+    ) -> None:
+        try:
+            clip_path = save_examiner_clip(self.session_id, seq, pcm) if pcm else None
+            crud.create_turn(
+                session_id=self.session_id,
+                role="assistant",
+                clip_path=clip_path,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                text=text or None,
+            )
+        except Exception:
+            logger.exception(
+                "考官切片落盘失败: session=%s seq=%s", self.session_id, seq
+            )

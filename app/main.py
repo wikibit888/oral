@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.dialog import router as dialog_router
 from app.api.health import router as health_router
 from app.api.live_ws import router as live_ws_router
 from app.api.questions import TTS_DIR, TTS_URL_PREFIX, router as questions_router
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(review_router)
     app.include_router(live_ws_router)
     app.include_router(questions_router)
+    app.include_router(dialog_router)
 
     # 预生成 TTS 音频静态挂载（SCHEMA §6.5）。目录启动即建：tts_url 引用的
     # 路由必须真实存在，否则文件落地后 URL 指向 404（review C1）。

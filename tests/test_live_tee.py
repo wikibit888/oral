@@ -224,3 +224,121 @@ def test_finalize_failure_swallowed(ingested, monkeypatch, caplog):
 
     asyncio.run(scenario())
     assert "tee 切片上传/收口失败" in caplog.text
+
+
+# ---------- 考官/AI 音频按轮捕获（dialog 回看，纯回放、不进评测）----------
+
+EX_HALF_SEC = b"\x02" * (48000 // 2)       # 0.5s 考官帧（24k×16bit×mono = 48000 B/s）
+
+
+@pytest.fixture
+def examiner(monkeypatch):
+    """打桩考官切片落盘 + assistant turn 落库，返回记录 [(role, clip, start, end, text)]。"""
+    calls: list[tuple] = []
+
+    def fake_save_ex(session_id, seq, pcm):
+        return f"/fake/{session_id}_examiner{seq:03d}.wav"
+
+    def fake_create_turn(*, session_id, role, clip_path, start_ts=None, end_ts=None, text=None):
+        calls.append((role, clip_path, start_ts, end_ts, text))
+        return len(calls)
+
+    monkeypatch.setattr(tee_module, "save_examiner_clip", fake_save_ex)
+    monkeypatch.setattr(tee_module.crud, "create_turn", fake_create_turn)
+    return calls
+
+
+async def _drain_examiner(t):
+    await t.drain()
+    await asyncio.gather(*t._examiner_tasks, return_exceptions=True)
+
+
+def test_examiner_clip_captured_on_turn_complete(ingested, examiner):
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_user_frame(HALF_SEC)              # user [0, 1.0)
+        t.on_model_audio(EX_HALF_SEC)          # 考官开口：封 user 切片 + 累积考官音频
+        t.on_examiner_transcript("Hello, ")
+        t.on_model_audio(EX_HALF_SEC)          # 1.0s 考官音频
+        t.on_examiner_transcript("welcome.")
+        t.on_turn_complete()                   # 考官轮结束 → 封考官切片
+        t.on_user_frame(HALF_SEC)              # 下一轮用户
+        t.finish()
+        await _drain_examiner(t)
+
+    asyncio.run(scenario())
+    # 用户切片仍正常（考官捕获不污染评测链路）。本场未模拟考官说话期间的麦克风帧，
+    # 故 _pos 在考官段不前进：第二轮用户切片从 1.0 起 [1.0, 1.5)。
+    assert ingested == [(0, BYTES_PER_SECOND, 0.0, 1.0), (1, BYTES_PER_SECOND // 2, 1.0, 1.5)]
+    # 考官一条 assistant 回合：文本拼接、有切片、start_ts = 考官开口时的 _pos(=1.0)
+    assert len(examiner) == 1
+    role, clip, start, end, text = examiner[0]
+    assert role == "assistant"
+    assert clip is not None and "examiner000" in clip
+    assert text == "Hello, welcome."
+    assert start == 1.0
+
+
+def test_examiner_clip_cut_on_barge_in(ingested, examiner):
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_model_audio(EX_HALF_SEC)          # 考官说
+        t.on_examiner_transcript("Let me explain")
+        t.on_interrupted()                     # 用户打断 → 封考官残段
+        t.finish()
+        await _drain_examiner(t)
+
+    asyncio.run(scenario())
+    assert len(examiner) == 1
+    assert examiner[0][0] == "assistant"
+    assert examiner[0][4] == "Let me explain"
+
+
+def test_examiner_clip_flushed_on_finish_if_examiner_talking(ingested, examiner):
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_model_audio(EX_HALF_SEC)          # 考官还在说时用户直接 End
+        t.on_examiner_transcript("Goodbye.")
+        t.finish()                             # 末轮考官 → finish 封最后一个考官切片
+        await _drain_examiner(t)
+
+    asyncio.run(scenario())
+    assert len(examiner) == 1
+    assert examiner[0][4] == "Goodbye."
+
+
+def test_no_examiner_clip_when_data_is_none(ingested, examiner):
+    """旧调用方/无 data 的 on_model_audio 只作边界信号，不产出考官回合（向后兼容）。"""
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_model_audio()                     # 无 data
+        t.on_turn_complete()
+        t.finish()
+        await _drain_examiner(t)
+
+    asyncio.run(scenario())
+    assert examiner == []
+
+
+def test_examiner_text_only_turn_saved_without_clip(ingested, examiner):
+    """只有转写、没有音频字节（on_model_audio 无 data）的考官轮：仍落 assistant 行
+    （text 在、clip_path=None），dialog 才不丢这一句。"""
+    async def scenario():
+        t = UserAudioTee("s1")
+        t.on_user_frame(HALF_SEC)
+        t.on_model_audio()                     # 边界信号，无音频字节
+        t.on_examiner_transcript("Thank you. That is the end.")
+        t.on_turn_complete()
+        t.finish()
+        await _drain_examiner(t)
+
+    asyncio.run(scenario())
+    assert len(examiner) == 1
+    role, clip, _start, _end, text = examiner[0]
+    assert role == "assistant"
+    assert clip is None                        # 无音频 → 无切片路径
+    assert text == "Thank you. That is the end."

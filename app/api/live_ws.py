@@ -72,7 +72,9 @@ def _parse_params(websocket: WebSocket) -> tuple[str, str | None, str | None, st
         raise ValueError(f"turn 必须是 {sorted(VALID_TURN_MODES)} 之一")
     mode = params.get("mode")
     if mode == "ielts_a":
-        return "ielts", "exam", None, turn
+        # 方式 A 只有实时模拟考（连续 live），不提供 PTT：任何 turn 入参一律按 natural
+        # 处理，从契约层保证方式 A 永不进 PTT/对话视图（前端也不渲染开关）。
+        return "ielts", "exam", None, "natural"
     if mode == "scenario":
         case = params.get("case")
         if case not in VALID_SCENARIO_CASES:

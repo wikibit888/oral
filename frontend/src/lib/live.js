@@ -18,6 +18,22 @@ export function normalizeTurn(value) {
   return value === 'ptt' ? 'ptt' : 'natural'
 }
 
+// 轮次模式 = 会话内视图（用户决策 2026-06-17）：natural→Immerse（沉浸波形、不显转写）、
+// ptt→Dialog（对话转录 + 逐轮回放）。**仅改显示文案**，URL/后端 turn 值仍是 natural|ptt。
+const TURN_LABELS = { natural: 'Immerse', ptt: 'Dialog' }
+export function turnLabel(turn) {
+  return TURN_LABELS[turn] ?? 'Immerse'
+}
+
+// AI 侧角色英文标签（用户决策「角色英文」）：雅思=Examiner，情景按 case
+// （点餐 Server / 会议 Colleague），未知回退 AI。用户侧固定 You。
+export function aiRoleLabel(mode, caseId) {
+  if (mode === 'ielts_a') return 'Examiner'
+  if (caseId === 'ordering') return 'Server'
+  if (caseId === 'meeting') return 'Colleague'
+  return 'AI'
+}
+
 // WS 地址：走 vite 代理（/ws → :8000，ws:true），生产同源直连
 export function buildLiveUrl({ mode, caseId, turn }, loc = window.location) {
   const proto = loc.protocol === 'https:' ? 'wss' : 'ws'

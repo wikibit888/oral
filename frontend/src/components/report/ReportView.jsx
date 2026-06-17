@@ -1,4 +1,5 @@
 import BandRadar from './BandRadar.jsx'
+import DialogCard from './DialogCard.jsx'
 import { DIMENSION_META, fmtNum, isIelts, isUnscorable, formatDuration } from '../../lib/report.js'
 
 // 报告页共享小样式：引用条（mono 底纹）/ 节内小标题 / 翡翠建议行
@@ -25,7 +26,7 @@ const SEV_KIND = {
 // 按内容显隐（handoff 014）：rewrites 空列表整节不渲染（按数据不按 mode——
 // 情景恒空、雅思 unscorable 同样受益）；summary 非空才出末尾「总结」节
 // （仅情景非 null；雅思恒 null，情景 judge 漏填降级 null）。
-export default function ReportView({ report }) {
+export default function ReportView({ report, dialog }) {
   const ielts = isIelts(report)
   const { practice_summary: summary, dimensions, overall_band, diagnostics: dx } = report
 
@@ -178,6 +179,18 @@ export default function ReportView({ report }) {
         <Section title="总结">
           <p className="my-1.5">{dx.summary}</p>
         </Section>
+      )}
+
+      {/* 对话回看（Req1）：末尾追加人机对话卡片（文字 + 逐轮回放）。仅覆盖 live
+          会话（雅思 A / 情景）——判据是「存在 AI 回合」：方式 B 只有 user 回合
+          （逐题独白、无人机对话），不出此卡（Req1 明确不含方式 B）。不依赖 judge——
+          评分 failed/unscorable 也能回看（Report.jsx 在 done 后单独取 dialog）。 */}
+      {dialog?.turns?.some((t) => t.role !== 'user') && (
+        <DialogCard
+          turns={dialog.turns}
+          mode={dialog.mode}
+          scenarioCase={dialog.scenario_case}
+        />
       )}
     </div>
   )

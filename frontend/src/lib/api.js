@@ -4,6 +4,10 @@
 // route names. The backend is a read-only contract here (TODO.frontend 硬规则).
 const BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
+// 后端返回的相对 URL（如 dialog 的 audio_url=/sessions/.../audio）要走同一代理前缀
+// 才能命中后端——拼 <audio src> / fetch 时统一用它加前缀。
+export const API_BASE = BASE;
+
 export class ApiError extends Error {
   constructor(status, detail) {
     super(`HTTP ${status}: ${detailText(detail)}`);
@@ -55,6 +59,13 @@ export function createRecording({ blob, mode, subMode, scenarioCase }) {
 // status === 'done' (uploaded | processing | done | failed).
 export function getReport(sessionId, { signal } = {}) {
   return request(`/reports/${sessionId}`, { signal });
+}
+
+// GET /sessions/{id}/dialog — { mode, scenario_case, turns:[{turn_id, role,
+// text, start_ts, end_ts, audio_url}] }。report 末尾 Dialog 卡片用；仅 live
+// 会话（雅思 A / 情景）有 assistant 回合，方式 B / 无回合返回空 turns。
+export function getDialog(sessionId, { signal } = {}) {
+  return request(`/sessions/${sessionId}/dialog`, { signal });
 }
 
 export function getHealth() {

@@ -107,15 +107,45 @@ def create_turn(
     clip_path: str | None,
     start_ts: float | None = None,
     end_ts: float | None = None,
+    text: str | None = None,
 ) -> int:
-    """插入一个回合（切片落地时建行，转写结果稍后回填），返回自增 id。"""
+    """插入一个回合，返回自增 id。
+
+    用户回合（user）切片落地时建行、text 由 finish_turn 回填（增量流水线）；
+    AI 回合（assistant，dialog 回看用）一次性带 text 落地——纯回放、不进评测，
+    故不走 finish_turn 的转写回填。
+    """
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO turns (session_id, role, clip_path, start_ts, end_ts) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (session_id, role, clip_path, start_ts, end_ts),
+            "INSERT INTO turns (session_id, role, clip_path, start_ts, end_ts, text) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, role, clip_path, start_ts, end_ts, text),
         )
         return cur.lastrowid
+
+
+def get_turn(turn_id: int) -> sqlite3.Row | None:
+    """取一个回合行（逐轮音频回放端点按 id 取 clip_path 用）；不存在返回 None。"""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM turns WHERE id = ?", (turn_id,)
+        ).fetchone()
+
+
+def list_dialog_turns(session_id: str) -> list[sqlite3.Row]:
+    """整场人机对话流（dialog 卡片 / Dialog 视图）：全角色按时序。
+
+    排序键 = start_ts（相对会话起点单调时钟，user/assistant 同一时间轴 → 正确交错），
+    缺失的（如方式 B 逐题录音无统一时钟）排到最后并用自增 id 兜底。
+    不做 list_processed_user_turns 的 clip_path 去重——live 切片名带序号天然唯一。
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, role, text, start_ts, end_ts, clip_path FROM turns "
+            "WHERE session_id = ? "
+            "ORDER BY (start_ts IS NULL), start_ts, id",
+            (session_id,),
+        ).fetchall()
 
 
 def finish_turn(

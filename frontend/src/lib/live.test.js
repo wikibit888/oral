@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PART_STAGES,
+  aiRoleLabel,
   appendDelta,
   buildLiveUrl,
   createFrameBatcher,
@@ -9,8 +10,26 @@ import {
   parseEvent,
   partStage,
   pttReducer,
+  turnLabel,
   validateLiveParams,
 } from './live.js'
+
+describe('turnLabel（轮次模式 = 视图文案，2026-06-17）', () => {
+  it('natural→Immerse、ptt→Dialog；未知回退 Immerse', () => {
+    expect(turnLabel('natural')).toBe('Immerse')
+    expect(turnLabel('ptt')).toBe('Dialog')
+    expect(turnLabel('bogus')).toBe('Immerse')
+  })
+})
+
+describe('aiRoleLabel（AI 侧英文角色标签）', () => {
+  it('雅思=Examiner；情景按 case；未知回退 AI', () => {
+    expect(aiRoleLabel('ielts_a', null)).toBe('Examiner')
+    expect(aiRoleLabel('scenario', 'ordering')).toBe('Server')
+    expect(aiRoleLabel('scenario', 'meeting')).toBe('Colleague')
+    expect(aiRoleLabel('scenario', 'bogus')).toBe('AI')
+  })
+})
 
 describe('validateLiveParams（契约 SCHEMA §6.1）', () => {
   it('ielts_a 不需要 case；scenario 必须带', () => {

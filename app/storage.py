@@ -11,6 +11,10 @@ EXPECTED_SAMPLE_RATE = 16000
 EXPECTED_CHANNELS = 1
 EXPECTED_SAMPLE_WIDTH = 2  # 字节，= 16-bit
 
+# 考官/AI 下行音频采样率（Live out，对齐 client.RECV_SAMPLE_RATE=24000）。
+# 仅用于 dialog 回看的切片落盘，不进评测——不复用 16k 的 save_clip 以免变调/时长错乱。
+EXAMINER_SAMPLE_RATE = 24000
+
 
 def _audio_dir() -> Path:
     d = Path(settings.audio_dir)
@@ -69,16 +73,33 @@ def delete_session_audio(session_id: str) -> int:
     return deleted
 
 
+def _write_wav(path: Path, pcm: bytes, rate: int) -> None:
+    """裸 PCM（16-bit / mono）补 WAV 头写盘——契约固定格式，免转码。"""
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+
+
 def save_clip(session_id: str, seq: int, pcm: bytes) -> str:
-    """把一个回合切片（16k/16-bit/mono 裸 PCM）封 WAV 头写盘，返回落盘路径。
+    """把一个用户回合切片（16k/16-bit/mono 裸 PCM）封 WAV 头写盘，返回落盘路径。
 
     tee 出来的是裸 PCM 帧（契约固定格式，免转码），只需补 WAV 头给 whisper 读。
     序号三位零填充（假定单会话 ≤999 个切片，demo 量级远够）。
     """
     path = _audio_dir() / f"{session_id}_turn{seq:03d}.wav"
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(16000)
-        w.writeframes(pcm)
+    _write_wav(path, pcm, EXPECTED_SAMPLE_RATE)
+    return str(path)
+
+
+def save_examiner_clip(session_id: str, seq: int, pcm: bytes) -> str:
+    """把一个考官/AI 回合的下行音频（24k/16-bit/mono 裸 PCM）封 WAV 写盘，返回路径。
+
+    纯供 dialog 回看回放，**不进评测**（不喂 whisper/judge）。命名带 `_examiner` 中缀
+    以与用户切片（`_turn`）区分；仍保 `{session_id}` 前缀，故 delete_session_audio 的
+    前缀 glob 会在 Give Up 时连带删除，无需改删除逻辑。
+    """
+    path = _audio_dir() / f"{session_id}_examiner{seq:03d}.wav"
+    _write_wav(path, pcm, EXAMINER_SAMPLE_RATE)
     return str(path)

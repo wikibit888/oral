@@ -49,3 +49,13 @@ export function formatDuration(seconds) {
   const rem = s % 60
   return m > 0 ? `${m}:${String(rem).padStart(2, '0')}` : `${rem}s`
 }
+
+// Dialog 卡片 AI 侧英文角色标签（用户决策「角色英文」）：dialog API 返回的
+// mode 是存储层值 ielts | scenario（非 ielts_a）。雅思=Examiner，情景按 case
+// （点餐 Server / 会议 Colleague），未知回退 AI；用户侧固定 You。
+export function dialogAiLabel(mode, scenarioCase) {
+  if (mode === 'ielts') return 'Examiner'
+  if (scenarioCase === 'ordering') return 'Server'
+  if (scenarioCase === 'meeting') return 'Colleague'
+  return 'AI'
+}

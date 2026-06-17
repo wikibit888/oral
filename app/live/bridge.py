@@ -203,7 +203,8 @@ async def _pump_downstream(
                         logger.warning("live WS 收到空 tool_call 批，未回包")
             if response.data:
                 if tee is not None:
-                    tee.on_model_audio()    # 考官开口 = 用户切片的轮次边界
+                    # 轮次边界 + 按轮捕获考官音频（dialog 回看；纯回放、不进评测）
+                    tee.on_model_audio(response.data)
                 if director is not None:
                     director.on_model_audio()   # 标记本轮考官真发声（空轮不推进 FSM）
                 latency_ms = meter.on_model_audio() if meter is not None else None
@@ -227,6 +228,8 @@ async def _pump_downstream(
                 # 真正转场延迟到 turn_complete。放在 send 之前：边界状态先于事件落定。
                 if director is not None:
                     director.on_examiner_transcript(ot.text)
+                if tee is not None:
+                    tee.on_examiner_transcript(ot.text)   # 累积进当前考官轮文本（dialog 显示）
                 await websocket.send_json(
                     {"type": "transcript_delta", "role": "examiner", "text": ot.text}
                 )

@@ -34,7 +34,7 @@ INSERT OR IGNORE INTO settings (id, target_band) VALUES (1, NULL);
 CREATE TABLE IF NOT EXISTS turns (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id      TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
-    role            TEXT NOT NULL,                               -- user | examiner | persona
+    role            TEXT NOT NULL,                               -- user | assistant（AI 回合，dialog 回看）| examiner | persona
     text            TEXT,                                        -- 转写文本
     start_ts        REAL,                                        -- 相对会话起点的秒数（单调时钟）
     end_ts          REAL,

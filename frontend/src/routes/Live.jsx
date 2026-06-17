@@ -7,6 +7,7 @@ import { rmsLevel16 } from '../lib/audio/level.js'
 import VoiceWave from '../components/VoiceWave.jsx'
 import {
   PART_STAGES,
+  aiRoleLabel,
   appendDelta,
   buildLiveUrl,
   createFrameBatcher,
@@ -15,15 +16,19 @@ import {
   parseEvent,
   partStage,
   pttReducer,
+  turnLabel,
   validateLiveParams,
 } from '../lib/live.js'
 import { createNudgeTimer } from '../lib/nudge.js'
+import { API_BASE, getDialog } from '../lib/api.js'
 
 // 气泡（Transcript 模式）/ 徽章 共享样式
 const BUBBLE_BASE = 'max-w-[76%] rounded-[14px] border px-3.5 py-2.5'
 const BUBBLE_ROLE =
   'font-mono text-[11px] font-semibold uppercase leading-none tracking-[0.08em] text-ink'
 const BADGE_BASE = 'rounded-full border px-2.5 py-1.5 font-mono text-xs font-semibold leading-none'
+const PLAY_BTN =
+  'shrink-0 cursor-pointer rounded-full border border-accent-line bg-accent-soft px-2.5 py-1 font-mono text-[11px] font-semibold leading-none text-accent transition-colors duration-150 hover:border-accent-bright'
 
 // F6 实时会话页（雅思 A + 情景共用；handoff 001 联调范围）：
 //   mic 16k PCM 裸帧（合批 ~200ms）→ WS 上行；下行 24k PCM 播放队列 + 事件流；
@@ -50,7 +55,11 @@ export default function Live() {
   const navigate = useNavigate()
   const mode = params.get('mode')
   const caseId = params.get('case')
-  const turnMode = normalizeTurn(params.get('turn'))
+  // 雅思 A 只有 live（无 PTT，B5 后端也强制）——非情景一律 natural，前端与后端对齐
+  const turnMode = mode === 'scenario' ? normalizeTurn(params.get('turn')) : 'natural'
+  // 视图随轮次模式：Dialog(ptt) 显对话转录 + 逐轮回放；Immerse(natural) 沉浸波形
+  const dialogView = turnMode === 'ptt'
+  const aiLabel = aiRoleLabel(mode, caseId)
   const paramError = validateLiveParams({ mode, caseId })
 
   // connecting → live → ending；error 终态（Retry 重连）
@@ -60,10 +69,14 @@ export default function Live() {
   const [examinerSpeaking, setExaminerSpeaking] = useState(false)
   const [latencyMs, setLatencyMs] = useState(null) // 最近一轮考官应答延迟
   const [attempt, setAttempt] = useState(0) // Retry bump 重启连接 effect
-  // 波形/气泡显示开关（会话内偏好，重连不重置）：默认波形（不看转写）
-  const [showTranscript, setShowTranscript] = useState(false)
   // PTT 轮次状态机：idle | pressed | waiting（见 lib/live.js pttReducer）
   const [ptt, dispatchPtt] = useReducer(pttReducer, 'idle')
+  // 转写可见性已由轮次模式决定（Immerse 隐 / Dialog 显），不再有手动 Transcript 开关
+  // Dialog 视图逐轮回放（F2，仅 ptt）：每轮结束取 dialog API 拿各回合 {role, url}，
+  // 按序号 + role 对齐到转写气泡（PTT 轮次离散、气泡与回合 1:1）；playingIdx = 正在播的气泡
+  const [dialogAudio, setDialogAudio] = useState([])
+  const [playingIdx, setPlayingIdx] = useState(null)
+  const dialogAudioElRef = useRef(null)
   // 方式 A 导演状态（handoff 005）：scenario 无 part 事件恒 null（不出进度条）
   const [part, setPart] = useState(null)
   const [cueCard, setCueCard] = useState(null) // present_cue_card 的 card
@@ -106,6 +119,8 @@ export default function Live() {
     setPrepLeft(null)
     setNotes('')
     setReadySent(false)
+    setDialogAudio([])
+    setPlayingIdx(null)
   }
 
   // 备题倒计时：start_prep_timer 起跳，每秒递减到 0 即停（断轮以后端
@@ -121,8 +136,8 @@ export default function Live() {
 
   // 转写流自动滚到最新（仅气泡模式；波形模式无滚动区）
   useEffect(() => {
-    if (showTranscript) transcriptEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [transcript, showTranscript])
+    if (dialogView) transcriptEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [transcript, dialogView])
 
   useEffect(() => {
     if (paramError) return
@@ -246,6 +261,21 @@ export default function Live() {
           setExaminerSpeaking(false)
           dispatchPtt('turn_complete') // PTT：考官应答完毕，解锁下一次按键
           nudge?.turnComplete() // 轮到用户：沉默倒计时 armed（排空后起表）
+          // Dialog 视图（ptt）：本轮收尾后刷新各回合 audio_url，给已完成气泡挂回放键。
+          // 取不到只是暂无回放（不影响实时转写），故 catch 静默。
+          // 用 turnMode（effect 依赖项）而非派生的 dialogView，满足 exhaustive-deps
+          if (turnMode === 'ptt') {
+            const sid = sessionRef.current
+            if (sid)
+              getDialog(sid)
+                .then((d) => {
+                  // 存 {role, url} 而非裸 url：渲染按 role 对齐气泡，万一某回合尚未落库
+                  // 导致序号错位，role 不匹配则不挂回放键（绝不把别人的音频挂错气泡，W1）
+                  if (alive && d?.turns)
+                    setDialogAudio(d.turns.map((t) => ({ role: t.role, url: t.audio_url })))
+                })
+                .catch(() => {})
+          }
           break
         case 'latency_ms':
           // 考官每轮首帧音频后下发（一轮一次；考官先开口的轮次不发）
@@ -328,6 +358,21 @@ export default function Live() {
 
   const retry = () => setAttempt((n) => n + 1)
 
+  // Dialog 逐轮回放：点击播该气泡对应回合录音（用户/考官原声）；再点暂停。
+  const playTurn = (i, url) => {
+    const el = dialogAudioElRef.current
+    if (!el || !url) return
+    if (playingIdx === i && !el.paused) {
+      el.pause()
+      setPlayingIdx(null)
+      return
+    }
+    el.src = `${API_BASE}${url}`
+    el.play()
+      .then(() => setPlayingIdx(i))
+      .catch(() => setPlayingIdx(null)) // 文件缺失等：静默退回，不炸会话页
+  }
+
   // PTT 按下：开始上行音频帧（pttPressedRef 是 onFrame 的闸门）
   const pttDown = () => {
     if (status !== 'live' || ptt !== 'idle') return
@@ -366,6 +411,8 @@ export default function Live() {
   // connKey 含 turnMode，setParams 后旧连接整体拆除、新参数重建
   const switchTurn = (next) => {
     if (next === turnMode || status === 'ending') return
+    // 切换 Immerse↔Dialog = 改连接参数 → 整条 WS 重连、本场从头开始：二次确认防误触
+    if (!window.confirm('切换会重新开始本场会话，当前进度会丢失。确定切换？')) return
     const q = new URLSearchParams(params)
     q.set('turn', next)
     setParams(q, { replace: true })
@@ -467,45 +514,57 @@ export default function Live() {
           <span className="eyebrow-dot" aria-hidden="true" />
           {title}
         </p>
-        <div className="flex items-center gap-2">
-          {latencyMs != null && (
-            <span
-              className={`${BADGE_BASE} border-line bg-white text-ink`}
-              title={
-                turnMode === 'ptt'
-                  ? '考官应答延迟：松开按钮 → 首帧音频'
-                  : '考官应答延迟（近似值，含 VAD 判停耗时）'
-              }
-            >
-              {formatLatency(latencyMs, turnMode)}
-            </span>
-          )}
-          {/* 波形 ⇄ 气泡切换（默认波形——靠听不靠读；转写始终在采集） */}
-          <button
-            type="button"
-            onClick={() => setShowTranscript((v) => !v)}
-            aria-pressed={showTranscript}
-            className={`${BADGE_BASE} cursor-pointer transition-colors duration-150 ${
-              showTranscript
-                ? 'border-accent-line bg-accent-soft text-accent'
-                : 'border-line bg-white text-ink hover:border-accent-bright'
-            }`}
+        {/* 轮次模式 = 视图开关，移到右上角（仅情景；雅思 A 只有 live，不渲染开关）：
+            Immerse(natural)=沉浸波形 / Dialog(ptt)=对话转录 + 逐轮回放。切换走重连。 */}
+        {mode === 'scenario' && (
+          <div
+            className="inline-flex overflow-hidden rounded-full border border-line"
+            role="group"
+            aria-label="View mode"
           >
-            Transcript
-          </button>
-          <span
-            className={`${BADGE_BASE} ${
-              status === 'live'
-                ? 'border-accent-line bg-accent-soft text-accent'
-                : 'border-line text-ink'
-            }`}
-          >
-            {status === 'connecting' && 'Connecting…'}
-            {status === 'live' && '● Live'}
-            {status === 'ending' && 'Ending…'}
-          </span>
-        </div>
+            {['natural', 'ptt'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`cursor-pointer border-none px-3.5 py-2 font-mono text-xs font-semibold leading-none transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  turnMode === m ? 'bg-accent-soft text-accent' : 'bg-transparent text-ink'
+                }`}
+                onClick={() => switchTurn(m)}
+                disabled={status === 'ending'}
+              >
+                {turnLabel(m)}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
+
+      {/* 状态居中（延迟徽章 + Live）——原右上角状态移到这里 */}
+      <div className="mt-3 flex items-center justify-center gap-2">
+        {latencyMs != null && (
+          <span
+            className={`${BADGE_BASE} border-line bg-white text-ink`}
+            title={
+              turnMode === 'ptt'
+                ? '考官应答延迟：松开按钮 → 首帧音频'
+                : '考官应答延迟（近似值，含 VAD 判停耗时）'
+            }
+          >
+            {formatLatency(latencyMs, turnMode)}
+          </span>
+        )}
+        <span
+          className={`${BADGE_BASE} ${
+            status === 'live'
+              ? 'border-accent-line bg-accent-soft text-accent'
+              : 'border-line text-ink'
+          }`}
+        >
+          {status === 'connecting' && 'Connecting…'}
+          {status === 'live' && '● Live'}
+          {status === 'ending' && 'Ending…'}
+        </span>
+      </div>
 
       {(stage != null || examDone) && (
         <nav className="mt-3.5 flex items-center gap-2" aria-label="Exam progress">
@@ -537,9 +596,10 @@ export default function Live() {
       )}
 
       <div className="relative my-5 flex flex-1 flex-col">
-        {showTranscript ? (
-          /* 气泡模式：双人转写流（Transcript 开关打开时） */
+        {dialogView ? (
+          /* Dialog 视图（ptt）：人机对话转录流——AI 靠左、You 靠右，逐轮可回放 */
           <div className="flex flex-1 flex-col gap-3 overflow-y-auto" aria-live="polite">
+            <audio ref={dialogAudioElRef} onEnded={() => setPlayingIdx(null)} className="hidden" />
             {inlineCue}
             {transcript.length === 0 && <p className="muted">{hint}</p>}
             {transcript.map((b, i) => (
@@ -551,7 +611,18 @@ export default function Live() {
                     : 'self-start border-line bg-white'
                 }`}
               >
-                <span className={BUBBLE_ROLE}>{b.role === 'user' ? 'You' : 'Examiner'}</span>
+                <div className="flex items-center justify-between gap-3">
+                  <span className={BUBBLE_ROLE}>{b.role === 'user' ? 'You' : aiLabel}</span>
+                  {dialogAudio[i]?.role === b.role && dialogAudio[i]?.url && (
+                    <button
+                      type="button"
+                      className={PLAY_BTN}
+                      onClick={() => playTurn(i, dialogAudio[i].url)}
+                    >
+                      {playingIdx === i ? 'Pause' : 'Play'}
+                    </button>
+                  )}
+                </div>
                 <p className="mb-0 mt-1">{b.text}</p>
               </div>
             ))}
@@ -561,7 +632,7 @@ export default function Live() {
                   className="h-2.5 w-2.5 animate-reading-pulse rounded-full bg-accent-bright motion-reduce:animate-none"
                   aria-hidden="true"
                 />
-                Examiner speaking…
+                {aiLabel} speaking…
               </p>
             )}
             {doneNote}
@@ -629,64 +700,45 @@ export default function Live() {
         )}
       </div>
 
-      <footer className="flex flex-wrap items-center gap-3.5 border-t border-line pt-4">
-        {turnMode === 'ptt' && (
+      <footer className="flex flex-col items-center gap-2 border-t border-line pt-4">
+        <div className="flex items-center justify-center gap-3.5">
+          {turnMode === 'ptt' && (
+            <button
+              type="button"
+              className={`btn-primary min-w-[148px] touch-none select-none ${
+                ptt === 'pressed'
+                  ? 'bg-accent shadow-[0_0_0_4px_var(--color-accent-soft)]'
+                  : ptt === 'waiting'
+                    ? 'opacity-60'
+                    : ''
+              }`}
+              onPointerDown={pttDown}
+              onPointerUp={pttUp}
+              onPointerLeave={pttUp}
+              onPointerCancel={pttUp}
+              onKeyDown={pttKeyDown}
+              onKeyUp={pttKeyUp}
+              onContextMenu={(e) => e.preventDefault()}
+              disabled={status !== 'live' || ptt === 'waiting'}
+              aria-pressed={ptt === 'pressed'}
+            >
+              {ptt === 'pressed'
+                ? 'Release to send'
+                : ptt === 'waiting'
+                  ? 'Waiting…'
+                  : 'Hold to talk'}
+            </button>
+          )}
           <button
             type="button"
-            className={`btn-primary min-w-[148px] touch-none select-none ${
-              ptt === 'pressed'
-                ? 'bg-accent shadow-[0_0_0_4px_var(--color-accent-soft)]'
-                : ptt === 'waiting'
-                  ? 'opacity-60'
-                  : ''
-            }`}
-            onPointerDown={pttDown}
-            onPointerUp={pttUp}
-            onPointerLeave={pttUp}
-            onPointerCancel={pttUp}
-            onKeyDown={pttKeyDown}
-            onKeyUp={pttKeyUp}
-            onContextMenu={(e) => e.preventDefault()}
-            disabled={status !== 'live' || ptt === 'waiting'}
-            aria-pressed={ptt === 'pressed'}
+            className="btn-primary min-w-24"
+            onClick={endSession}
+            disabled={status !== 'live'}
           >
-            {ptt === 'pressed'
-              ? 'Release to send'
-              : ptt === 'waiting'
-                ? 'Waiting…'
-                : 'Hold to talk'}
+            End
           </button>
-        )}
-        <div
-          className="inline-flex overflow-hidden rounded-full border border-line"
-          role="group"
-          aria-label="Turn mode"
-        >
-          {['natural', 'ptt'].map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={`cursor-pointer border-none px-3.5 py-2 font-mono text-xs font-semibold leading-none transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
-                turnMode === m ? 'bg-accent-soft text-accent' : 'bg-transparent text-ink'
-              }`}
-              onClick={() => switchTurn(m)}
-              disabled={status === 'ending'}
-            >
-              {m === 'natural' ? 'Natural' : 'PTT'}
-            </button>
-          ))}
         </div>
-        <button
-          type="button"
-          className="btn-primary min-w-24"
-          onClick={endSession}
-          disabled={status !== 'live'}
-        >
-          End
-        </button>
-        <span className="muted">
-          切换轮次模式会重新开始会话 · End 后自动评测并跳转报告
-        </span>
+        <span className="muted text-center">End 后自动评测并跳转报告</span>
       </footer>
     </section>
   )

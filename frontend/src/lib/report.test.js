@@ -1,11 +1,28 @@
 import { describe, it, expect } from 'vitest'
-import { fmtNum, isIelts, isUnscorable, toRadarData, formatDuration, DIMENSION_META } from './report.js'
+import {
+  fmtNum,
+  isIelts,
+  isUnscorable,
+  toRadarData,
+  formatDuration,
+  DIMENSION_META,
+  dialogAiLabel,
+} from './report.js'
 import {
   ieltsModuleReport,
   ieltsReport,
   scenarioReport,
   unscorableReport,
 } from '../fixtures/reportFixtures.js'
+
+describe('dialogAiLabel（AI 侧英文角色，dialog API mode 是存储层 ielts|scenario）', () => {
+  it('雅思=Examiner；情景按 case；未知回退 AI', () => {
+    expect(dialogAiLabel('ielts', null)).toBe('Examiner')
+    expect(dialogAiLabel('scenario', 'ordering')).toBe('Server')
+    expect(dialogAiLabel('scenario', 'meeting')).toBe('Colleague')
+    expect(dialogAiLabel('scenario', null)).toBe('AI')
+  })
+})
 
 describe('isIelts', () => {
   it('is true when dimensions + overall_band are present', () => {

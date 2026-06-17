@@ -7,8 +7,28 @@ import {
   scenarioReport,
   unscorableReport,
 } from '../fixtures/reportFixtures.js'
-import { errorText, getReport } from '../lib/api.js'
+import { errorText, getDialog, getReport } from '../lib/api.js'
 import { classifyStatus, POLL_INTERVAL_MS, STAGES, stageIndex, STATUS_TEXT } from '../lib/polling.js'
+
+// demo 报告的对话回看预览（零后端）：audio_url 留空 → 只展示文字布局、无 Play 按钮
+const DEMO_DIALOGS = {
+  'demo-ielts': {
+    mode: 'ielts',
+    scenario_case: null,
+    turns: [
+      { turn_id: 1, role: 'assistant', text: 'What do you do for work?', audio_url: null },
+      { turn_id: 2, role: 'user', text: "I'm working as a software engineer.", audio_url: null },
+    ],
+  },
+  'demo-scenario': {
+    mode: 'scenario',
+    scenario_case: 'ordering',
+    turns: [
+      { turn_id: 1, role: 'assistant', text: 'Hi, welcome! What can I get for you?', audio_url: null },
+      { turn_id: 2, role: 'user', text: 'Can I have a cheeseburger and fries?', audio_url: null },
+    ],
+  },
+}
 
 // F2：/report/{id} 单路由双状态（处理态 + 报告态，不做独立处理页）。
 //   loading（首查中，只显示中性骨架——Library 进历史报告直接切报告态，不闪处理态）
@@ -36,8 +56,25 @@ export default function Report() {
   const demo = DEMOS[sessionId]
   const [state, setState] = useState(() => initial(sessionId))
   const [attempt, setAttempt] = useState(0) // Retry 按钮 bump 它重启轮询
+  const [dialog, setDialog] = useState(null) // 对话回看（done 后单独取，与 judge 解耦）
   // 路由参数变更时在渲染期重置（react.dev「adjusting state when props change」）
-  if (state.key !== sessionId) setState(initial(sessionId))
+  if (state.key !== sessionId) {
+    setState(initial(sessionId))
+    setDialog(null)
+  }
+
+  // 报告就绪后取整场对话流（仅真实会话；demo 直出 DEMO_DIALOGS）。dialog 取不到
+  // 只是不显示回看卡，不影响报告主体——故 catch 静默。
+  useEffect(() => {
+    if (DEMOS[sessionId] || state.phase !== 'done') return
+    const ctrl = new AbortController()
+    getDialog(sessionId, { signal: ctrl.signal })
+      .then((d) => {
+        if (!ctrl.signal.aborted) setDialog(d)
+      })
+      .catch(() => {})
+    return () => ctrl.abort()
+  }, [sessionId, state.phase])
 
   useEffect(() => {
     if (DEMOS[sessionId]) return // demo 渲染期直出，不打后端
@@ -97,7 +134,7 @@ export default function Report() {
     setAttempt((n) => n + 1)
   }
 
-  if (demo) return <ReportView report={demo} />
+  if (demo) return <ReportView report={demo} dialog={DEMO_DIALOGS[sessionId]} />
 
   if (state.phase === 'error') {
     return (
@@ -134,7 +171,7 @@ export default function Report() {
   }
 
   if (state.phase === 'done' && state.report) {
-    return <ReportView report={state.report} />
+    return <ReportView report={state.report} dialog={dialog} />
   }
 
   // loading：中性骨架（不闪流水线）；processing：流水线分步进度 + 骨架

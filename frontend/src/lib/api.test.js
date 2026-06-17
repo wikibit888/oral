@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { ApiError, detailText, errorText } from './api.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { ApiError, detailText, errorText, retryReport } from './api.js';
 
 // review W5：FastAPI 原生 422 的 detail 是 [{loc, msg, type}] 对象数组，
 // 直接 String() 会渲染成 "[object Object]"。pin 住 detailText 的归一化行为。
@@ -23,6 +23,37 @@ describe('detailText', () => {
   it('stringifies object / null details readably', () => {
     expect(detailText({ error: 'boom' })).toBe('{"error":"boom"}');
     expect(detailText(null)).toBe('未知错误');
+  });
+});
+
+describe('retryReport（失败恢复端点）', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('POST /reports/{id}/retry，返回 {status:processing}', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'processing' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await retryReport('abc123');
+    expect(res).toEqual({ status: 'processing' });
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toContain('/reports/abc123/retry');
+    expect(opts.method).toBe('POST');
+  });
+
+  it('409（状态不可重跑）抛 ApiError 带后端中文文案', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({ detail: '会话当前状态 completed 不可重跑' }),
+      })),
+    );
+    await expect(retryReport('done1')).rejects.toMatchObject({ status: 409 });
   });
 });
 

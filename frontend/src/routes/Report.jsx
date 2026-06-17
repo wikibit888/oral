@@ -7,8 +7,15 @@ import {
   scenarioReport,
   unscorableReport,
 } from '../fixtures/reportFixtures.js'
-import { errorText, getDialog, getReport } from '../lib/api.js'
-import { classifyStatus, POLL_INTERVAL_MS, STAGES, stageIndex, STATUS_TEXT } from '../lib/polling.js'
+import { errorText, getDialog, getReport, retryReport } from '../lib/api.js'
+import {
+  classifyStatus,
+  MAX_PROCESSING_MS,
+  POLL_INTERVAL_MS,
+  STAGES,
+  stageIndex,
+  STATUS_TEXT,
+} from '../lib/polling.js'
 
 // demo 报告的对话回看预览（零后端）：audio_url 留空 → 只展示文字布局、无 Play 按钮
 const DEMO_DIALOGS = {
@@ -44,7 +51,7 @@ const DEMOS = {
 
 const initial = (key) => ({
   key,
-  phase: 'loading', // loading | processing | done | failed | error
+  phase: 'loading', // loading | processing | done | failed | stalled | error
   status: null,
   stage: null,
   report: null,
@@ -82,12 +89,19 @@ export default function Report() {
     // 防止慢请求压住下一轮、或卸载后才返回的响应触发 setState（review W1）。
     const ctrl = new AbortController()
     let timer
+    let processingStart = null // 首次进 processing 的墙钟起点（轮询超时判据）
     const tick = async () => {
       try {
         const res = await getReport(sessionId, { signal: ctrl.signal })
         if (ctrl.signal.aborted) return
         switch (classifyStatus(res.status)) {
           case 'done':
+            // completed 但报告体缺失/损坏（后端 GET 对损坏 report_json 降级 report=null）：
+            // 不落 done（会渲染永久空骨架），改 stalled 给 Retry 重跑（故障定位 #C2）。
+            if (!res.report) {
+              setState({ key: sessionId, phase: 'stalled', status: res.status, stage: null, report: null, error: null })
+              return
+            }
             setState({ key: sessionId, phase: 'done', status: res.status, stage: null, report: res.report, error: null })
             return
           case 'failed':
@@ -105,6 +119,13 @@ export default function Report() {
             return
           default:
             // 首查就拿到 continue 才进处理态——Library 打开已完成报告不闪处理态
+            if (processingStart === null) processingStart = Date.now()
+            // 超过墙钟上限仍 processing = 卡住（上游挂死 / 进程重启掐断后台 finalize）：
+            // 停轮询、切 stalled，给用户 Retry 重跑，而不是无限转圈（故障定位 #17）。
+            if (Date.now() - processingStart > MAX_PROCESSING_MS) {
+              setState({ key: sessionId, phase: 'stalled', status: res.status, stage: null, report: null, error: null })
+              return
+            }
             setState({
               key: sessionId,
               phase: 'processing',
@@ -128,9 +149,24 @@ export default function Report() {
     }
   }, [sessionId, attempt])
 
-  // Retry：重置回 loading + bump attempt 重启轮询 effect
-  const retry = () => {
+  // error 态（404 / 后端没起 / 未知状态）：仅重新轮询，不重跑 judge——后端没数据问题，
+  // 只是这次没连上 / 状态契约外。重置回 loading + bump attempt 重启轮询 effect。
+  const repoll = () => {
     setState(initial(sessionId))
+    setAttempt((n) => n + 1)
+  }
+
+  // failed / stalled 态：调后端 /retry 从已落库的转写切片重跑一次 judge，再重启轮询。
+  // 这是真正的恢复——旧实现 Retry 只重新轮询、后端状态仍是 failed，永远卡在失败页
+  // （故障定位 #18）。retry 端点失败（如 409 状态已变）则落 error 态给可读文案。
+  const refinalize = async () => {
+    setState(initial(sessionId))
+    try {
+      await retryReport(sessionId)
+    } catch (e) {
+      setState({ key: sessionId, phase: 'error', status: null, stage: null, report: null, error: errorText(e) })
+      return
+    }
     setAttempt((n) => n + 1)
   }
 
@@ -142,7 +178,24 @@ export default function Report() {
         <h1>诊断报告</h1>
         <p className="form-error">{state.error}</p>
         <div className="mt-3 flex items-center gap-3">
-          <button type="button" className="btn-primary" onClick={retry}>
+          <button type="button" className="btn-primary" onClick={repoll}>
+            Retry
+          </button>
+          <Link className="text-sm" to="/">
+            Home
+          </Link>
+        </div>
+      </section>
+    )
+  }
+
+  if (state.phase === 'stalled') {
+    return (
+      <section>
+        <h1>处理超时</h1>
+        <p>评测超过预期时间仍未完成（可能后端中断或上游卡住）。点 Retry 重新生成报告。</p>
+        <div className="mt-3 flex items-center gap-3">
+          <button type="button" className="btn-primary" onClick={refinalize}>
             Retry
           </button>
           <Link className="text-sm" to="/">
@@ -159,7 +212,7 @@ export default function Report() {
         <h1>处理失败</h1>
         <p>处理失败，请重试。（系统处理出错，不是你的录音有问题）</p>
         <div className="mt-3 flex items-center gap-3">
-          <button type="button" className="btn-primary" onClick={retry}>
+          <button type="button" className="btn-primary" onClick={refinalize}>
             Retry
           </button>
           <Link className="text-sm" to="/">

@@ -250,7 +250,9 @@ def test_reupload_same_clip_dedupes_to_latest(tmp_db, monkeypatch):
     assert captured["signals"].word_count == len(WORDS)    # 词数不翻倍
 
 
-def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch):
+def test_empty_transcript_persists_unscorable_completed(tmp_db, monkeypatch):
+    # 切片全部转写失败 → 无已转写切片。不再哑 failed（故障定位 #G）：落一份
+    # unscorable 报告并置 completed，给用户"请重录"而非无信息的"处理失败"。
     _seed_session("ielts", sub_mode="module_p1")
     monkeypatch.setattr(pipeline, "upload_clip", lambda path: None)
 
@@ -261,11 +263,17 @@ def test_pipeline_failure_marks_failed_and_writes_no_report(tmp_db, monkeypatch)
 
     with pytest.raises(RuntimeError, match="whisper 挂了"):
         pipeline.ingest_clip("s1", "/fake.wav")
-    # ingest 炸了不碰状态（API 层吞日志）；review 后 finalize 无已转写切片 → failed
-    with pytest.raises(ValueError, match="无已转写"):
-        pipeline.finalize_session("s1")
-    assert crud.get_session("s1")["status"] == "failed"
-    assert crud.get_report("s1") is None          # 不留半份报告
+    # ingest 炸了不碰状态（API 层吞日志）；review 后 finalize 无已转写切片 → unscorable completed
+    pipeline.finalize_session("s1")
+    assert crud.get_session("s1")["status"] == "completed"   # 不是 failed
+    row = crud.get_report("s1")
+    assert row is not None
+    rep = Report.model_validate_json(row["report_json"])
+    assert rep.unscorable is True
+    assert rep.unscorable_reason is not None
+    assert rep.overall_band is None
+    # metrics 列全 NULL，不污染趋势线
+    assert row["wpm"] is None and row["overall_band"] is None
 
 
 def test_judge_failure_in_finalize_marks_failed_no_report(tmp_db, monkeypatch):
@@ -381,11 +389,13 @@ def test_incremental_two_clips_then_finalize(tmp_db, monkeypatch):
     assert row["wpm"] == compute_signals(merged.words, merged.duration).gross_wpm
 
 
-def test_finalize_without_processed_turns_fails(tmp_db, monkeypatch):
+def test_finalize_without_processed_turns_persists_unscorable(tmp_db, monkeypatch):
+    # 无已转写切片 → unscorable completed（不再 ValueError/failed，故障定位 #G）
     _seed_session("ielts", sub_mode="module_p2", audio_path=None)
-    with pytest.raises(ValueError, match="无已转写的用户切片"):
-        pipeline.finalize_session("s1")
-    assert crud.get_session("s1")["status"] == "failed"
+    pipeline.finalize_session("s1")
+    assert crud.get_session("s1")["status"] == "completed"
+    rep = Report.model_validate_json(crud.get_report("s1")["report_json"])
+    assert rep.unscorable is True
 
 
 # —— merge_transcripts —— #

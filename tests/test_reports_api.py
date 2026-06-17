@@ -81,3 +81,142 @@ def test_get_report_completed_but_no_report_row(client):
     body = client.get("/reports/d2").json()
     assert body["status"] == "completed"
     assert body["report"] is None
+
+
+def test_get_report_corrupt_json_degrades_not_500(client):
+    # report_json 损坏 / schema 漂移：GET 不 500，降级 report=null（故障定位 #19）
+    crud.create_session(
+        session_id="d3", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path="/x.wav", duration_s=3.0, status="completed",
+    )
+    crud.create_report(
+        session_id="d3", mode="ielts", overall_band=6.0,
+        fc_band=6.0, lr_band=6.0, gra_band=6.0, pron_band=6.0,
+        wpm=120.0, silence_ratio=0.1, filler_pm=2.0, ttr=0.8, error_rate=None,
+        report_json='{"not":"a valid report"}',   # 缺 required 字段
+    )
+    r = client.get("/reports/d3")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "completed"
+    assert body["report"] is None
+
+
+def _wait_for(predicate, timeout=2.0):
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_retry_failed_session_flips_processing_and_runs_finalize(client, monkeypatch):
+    # 失败会话可重跑恢复：POST /retry → processing + 后台 finalize 真被调用（故障定位 #18）
+    import app.api.reports as reports_mod
+
+    called = {}
+
+    def fake_finalize(session_id):
+        called["sid"] = session_id
+        crud.update_session_status(session_id, "completed")
+
+    monkeypatch.setattr(reports_mod, "finalize_session", fake_finalize)
+
+    crud.create_session(
+        session_id="r1", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path="/x.wav", duration_s=10.0, status="failed",
+    )
+    r = client.post("/reports/r1/retry")
+    assert r.status_code == 200
+    assert r.json()["status"] == "processing"
+    # 后台线程跑 finalize（mock 即时置 completed）——轮询等它落地
+    assert _wait_for(lambda: called.get("sid") == "r1")
+    assert _wait_for(lambda: crud.get_session("r1")["status"] == "completed")
+
+
+def test_retry_unknown_session_404(client):
+    assert client.post("/reports/nope/retry").status_code == 404
+
+
+def test_retry_inflight_dedup_skips_second_finalize(client, monkeypatch):
+    # 在途去重（C1/W2 防 double-finalize）：同一 session 已有重跑在途时，再次 POST /retry
+    # 直接返回 processing，不并发起第二个 finalize（前端 stalled 误判 / 连点都安全）。
+    import app.api.reports as reports_mod
+
+    called = []
+    monkeypatch.setattr(reports_mod, "finalize_session", lambda sid: called.append(sid))
+    crud.create_session(
+        session_id="r6", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path="/x.wav", duration_s=10.0, status="failed",
+    )
+    reports_mod._retry_inflight.add("r6")          # 模拟已有在途重跑
+    try:
+        r = client.post("/reports/r6/retry")
+        assert r.status_code == 200
+        assert r.json()["status"] == "processing"
+        assert called == []                        # 去重命中：未起第二个 finalize
+    finally:
+        reports_mod._retry_inflight.discard("r6")
+
+
+def test_retry_rejects_in_progress_session(client):
+    # live / recording 仍在进行中：不可重跑（409）
+    crud.create_session(
+        session_id="r2", mode="scenario", sub_mode=None, scenario_case="ordering",
+        audio_path=None, duration_s=None, status="live",
+    )
+    assert client.post("/reports/r2/retry").status_code == 409
+
+
+def test_retry_rejects_completed_with_valid_report(client):
+    # completed 且报告体完好：绝不重跑（避免无谓 judge 调用 / 覆盖好报告）→ 409
+    crud.create_session(
+        session_id="r3", mode="scenario", sub_mode=None, scenario_case="ordering",
+        audio_path="/x.wav", duration_s=3.0, status="completed",
+    )
+    crud.create_report(
+        session_id="r3", mode="scenario", overall_band=None,
+        fc_band=None, lr_band=None, gra_band=None, pron_band=None,
+        wpm=120.0, silence_ratio=0.1, filler_pm=2.0, ttr=0.8, error_rate=None,
+        report_json=_report_json(),
+    )
+    assert client.post("/reports/r3/retry").status_code == 409
+
+
+def test_retry_allows_completed_with_broken_report(client, monkeypatch):
+    # completed 但报告体损坏（GET 已降级 report=null）：这是死骨架的唯一出路——允许重跑（故障定位 #C2）
+    import app.api.reports as reports_mod
+
+    monkeypatch.setattr(
+        reports_mod, "finalize_session", lambda sid: crud.update_session_status(sid, "completed")
+    )
+    crud.create_session(
+        session_id="r4", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path="/x.wav", duration_s=3.0, status="completed",
+    )
+    crud.create_report(
+        session_id="r4", mode="ielts", overall_band=6.0,
+        fc_band=6.0, lr_band=6.0, gra_band=6.0, pron_band=6.0,
+        wpm=120.0, silence_ratio=0.1, filler_pm=2.0, ttr=0.8, error_rate=None,
+        report_json='{"broken":"schema"}',   # 损坏：缺 required 字段
+    )
+    r = client.post("/reports/r4/retry")
+    assert r.status_code == 200
+    assert r.json()["status"] == "processing"
+
+
+def test_retry_completed_no_report_row_recoverable(client, monkeypatch):
+    # completed 但 reports 行整个缺失：同属"无可渲染报告"，允许重跑
+    import app.api.reports as reports_mod
+
+    monkeypatch.setattr(
+        reports_mod, "finalize_session", lambda sid: crud.update_session_status(sid, "completed")
+    )
+    crud.create_session(
+        session_id="r5", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path="/x.wav", duration_s=3.0, status="completed",
+    )
+    assert client.post("/reports/r5/retry").status_code == 200

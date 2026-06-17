@@ -84,9 +84,15 @@ export default function ReportView({ report, dialog }) {
             </li>
           ))}
         </ul>
-        <h3 className={SUB_H3}>句式分析</h3>
-        <p className="my-1.5">{dx.syntactic_analysis.observation}</p>
-        <p className={SUGGESTION}>建议：{dx.syntactic_analysis.suggestion}</p>
+        {dx.syntactic_analysis.observation && (
+          <>
+            <h3 className={SUB_H3}>句式分析</h3>
+            <p className="my-1.5">{dx.syntactic_analysis.observation}</p>
+            {dx.syntactic_analysis.suggestion && (
+              <p className={SUGGESTION}>建议：{dx.syntactic_analysis.suggestion}</p>
+            )}
+          </>
+        )}
       </Section>
 
       <Section title="高频错误">

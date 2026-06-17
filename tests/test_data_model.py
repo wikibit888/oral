@@ -108,3 +108,24 @@ def test_migration_does_not_touch_new_recording_rows(tmp_db):
     )
     db.init_db()                                                   # 模拟重启
     assert crud.get_session("b1")["status"] == "recording"
+
+
+def test_startup_sweep_marks_orphaned_processing_failed(tmp_db):
+    # 故障定位 #4：进程重启时，残留 processing（上次 finalize 被掐断）→ 启动自愈标 failed，
+    # 给前端终态而非永久轮询；live / recording 合法中间态不动。
+    crud.create_session(
+        session_id="stuck", mode="ielts", sub_mode="exam", scenario_case=None,
+        audio_path=None, duration_s=10.0, status="processing",
+    )
+    crud.create_session(
+        session_id="live1", mode="scenario", sub_mode=None, scenario_case="ordering",
+        audio_path=None, duration_s=None, status="live",
+    )
+    crud.create_session(
+        session_id="rec1", mode="ielts", sub_mode="module_p1", scenario_case=None,
+        audio_path=None, duration_s=None, status="recording",
+    )
+    db.init_db()                                                   # 模拟重启
+    assert crud.get_session("stuck")["status"] == "failed"        # 孤儿 processing → failed
+    assert crud.get_session("live1")["status"] == "live"          # 合法中间态不动
+    assert crud.get_session("rec1")["status"] == "recording"

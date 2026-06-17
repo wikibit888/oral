@@ -14,9 +14,15 @@
 import logging
 
 from app import crud
-from app.judge.run import run_judge, upload_clip
+from app.judge.run import UNSCORABLE_REASON, run_judge, upload_clip
 from app.models import AudioClip, Transcript, Word, transcript_from_json, transcript_to_json
-from app.report import LiveFeedback, Report
+from app.report import (
+    Diagnostics,
+    LiveFeedback,
+    PracticeSummary,
+    Report,
+    SyntacticAnalysis,
+)
 from app.scenario_cases import judge_focus
 from app.signals import ObjectiveSignals, compute_signals
 from app.transcribe import transcribe
@@ -108,7 +114,14 @@ def finalize_session(
     try:
         rows = crud.list_processed_user_turns(session_id)
         if not rows:
-            raise ValueError(f"session 无已转写的用户切片，无法评测: {session_id}")
+            # 零可评切片（End 时没说话 / 全部切片转写失败 / 都太短被丢）不是系统故障，
+            # 是"没有可评内容"——落一份 unscorable 报告并置 completed，给用户清晰可行动的
+            # 文案（"未检出可评的英语口语内容，请重录"），而非无信息的"处理失败"
+            # （故障定位 #G：本应 unscorable，却被当成 failed）。
+            logger.info("session 无已转写的用户切片，落 unscorable 报告: %s", session_id)
+            _persist_unscorable(session_id, session["mode"])
+            crud.update_session_status(session_id, "completed")
+            return
 
         transcripts = [transcript_from_json(r["transcript_json"]) for r in rows]
         merged = merge_transcripts(transcripts)
@@ -198,6 +211,42 @@ def _persist_report(
         filler_pm=signals.filler_per_min,
         ttr=signals.type_token_ratio,
         error_rate=_error_rate(report, signals),
+        report_json=report.model_dump_json(),
+    )
+
+
+def _empty_diagnostics() -> Diagnostics:
+    """全空诊断层（unscorable 报告用）：无可评内容，诊断列表一律空。"""
+    return Diagnostics(
+        common_patterns=[],
+        syntactic_analysis=SyntacticAnalysis(observation="", suggestion=""),
+        frequent_errors=[],
+        fossilized_errors=[],
+        self_corrections=[],
+        top_priorities=[],
+        rewrites=[],
+        vocabulary_diversity_pct=None,
+    )
+
+
+def _persist_unscorable(session_id: str, mode: str) -> None:
+    """无可评内容时落一份 unscorable 报告（completed），metrics 列全 NULL 不污染趋势。
+
+    报告体含 unscorable=True + 统一文案，前端按 unscorable 渲染"请重录"提示；
+    band / wpm 等正规化列留 NULL，使其不进 band 轨迹与流利度趋势（趋势只取有效数据）。
+    """
+    report = Report(
+        practice_summary=PracticeSummary(speaking_time_s=0.0, sessions=1, recordings=0),
+        dimensions=None,
+        overall_band=None,
+        unscorable=True,
+        unscorable_reason=UNSCORABLE_REASON,
+        diagnostics=_empty_diagnostics(),
+    )
+    crud.create_report(
+        session_id=session_id, mode=mode, overall_band=None,
+        fc_band=None, lr_band=None, gra_band=None, pron_band=None,
+        wpm=None, silence_ratio=None, filler_pm=None, ttr=None, error_rate=None,
         report_json=report.model_dump_json(),
     )
 

@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     # 2.5-flash 允许 0；temp=0 grounded judge 关思考不引漂移。留开关便于 A/B 与一键回滚。
     judge_thinking_budget: int = 0
 
+    # judge 请求超时（毫秒）：上游挂起不回包时，超时抛错→重试→最终 failed，
+    # 不让 to_thread 线程永久阻塞、会话永久卡 processing（故障定位 #3）。
+    # 30s：flash 关思考的单次推理只需数秒，30s 已是"明显异常"阈值；同时让最坏
+    # 重试总时长（≈5×30s）仍小于前端 stalled 判据 MAX_PROCESSING_MS=180s，避免误判。
+    # 该超时也作用于 Files API 切片上传（秒级小文件，30s 充裕；超时仅降级 inline）。
+    judge_timeout_ms: int = 30000
+
+    # judge 结构化输出 token 上限：0 / 负值 = 不设（用模型默认上限，避免反而缩小留白
+    # 造成截断）；正值 = 显式上限（调优用）。截断由 finish_reason=MAX_TOKENS 检测兜底。
+    judge_max_output_tokens: int = 0
+
     # 实时对话用的 Live 模型（WS 双向音频流：16k PCM 上行 / 24k PCM 下行）
     live_model: str = "gemini-3.1-flash-live-preview"
 

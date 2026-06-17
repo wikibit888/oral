@@ -61,6 +61,12 @@ export function getReport(sessionId, { signal } = {}) {
   return request(`/reports/${sessionId}`, { signal });
 }
 
+// POST /reports/{id}/retry — 失败 / 卡死会话的恢复：后端从已落库转写切片重跑 judge，
+// 返回 {status:"processing"}；前端随后重启轮询。409 = 会话当前状态不可重跑。
+export function retryReport(sessionId) {
+  return request(`/reports/${sessionId}/retry`, { method: 'POST' });
+}
+
 // GET /sessions/{id}/dialog — { mode, scenario_case, turns:[{turn_id, role,
 // text, start_ts, end_ts, audio_url}] }。report 末尾 Dialog 卡片用；仅 live
 // 会话（雅思 A / 情景）有 assistant 回合，方式 B / 无回合返回空 turns。

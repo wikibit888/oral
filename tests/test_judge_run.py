@@ -178,17 +178,30 @@ def test_ielts_without_clips_warns_and_skips(monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, clips=None)
     assert len(fake.models.last["contents"]) == 1
-    assert any("未提供音频" in r.message for r in caplog.records)
+    assert any("无可用音频" in r.message for r in caplog.records)
 
 
-def test_ielts_missing_clip_file_raises(monkeypatch):
-    # 给了路径但文件不存在且无 URI → 明确报错
-    _patch(monkeypatch, _judged(_dims()))
-    with pytest.raises(FileNotFoundError):
-        judge_run.run_judge(
+def test_ielts_missing_clip_file_degrades_not_raises(monkeypatch, caplog):
+    # 给了路径但文件不存在且无 URI → 降级跳过该切片，不再把整份报告拖成 failed
+    # （故障定位 #F）。唯一切片缺失 → 无音频可喂，judge 仅依 transcript（降质 warning）。
+    fake = _patch(monkeypatch, _judged(_dims()))
+    with caplog.at_level("WARNING"):
+        rep = judge_run.run_judge(
             mode="ielts", transcript=TR, signals=SIG,
             clips=[AudioClip(path="/no/such.wav", duration_s=1.0)],
         )
+    assert rep.overall_band == 6.5                       # 正常出报告
+    assert len(fake.models.last["contents"]) == 1        # 无音频 Part，仅 prompt
+    assert any("读盘失败" in r.message or "无可用音频" in r.message for r in caplog.records)
+
+
+def test_ielts_one_bad_clip_still_feeds_good_one(monkeypatch, tmp_path):
+    # 两段切片一坏一好：坏的跳过、好的照喂（部分降级而非全失败）
+    fake = _patch(monkeypatch, _judged(_dims()))
+    good = AudioClip(path=_wav(tmp_path, "good.wav"), duration_s=9.0, file_uri=None)
+    bad = AudioClip(path="/no/such.wav", duration_s=5.0, file_uri=None)
+    judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG, clips=[good, bad])
+    assert len(fake.models.last["contents"]) == 2        # prompt + 1 段好切片
 
 
 def test_scenario_forces_no_band_and_no_audio(monkeypatch):
@@ -408,7 +421,7 @@ def test_judge_retries_transient_5xx(monkeypatch, caplog):
     rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
     assert calls["n"] == 3
     assert rep.overall_band == 6.5
-    assert "judge 上游 5xx" in caplog.text
+    assert "瞬态故障" in caplog.text
 
 
 def test_judge_5xx_exhausts_then_raises(monkeypatch):
@@ -428,18 +441,83 @@ def test_judge_5xx_exhausts_then_raises(monkeypatch):
     assert calls["n"] == 1 + len(judge_run.JUDGE_RETRY_BACKOFF_S)
 
 
-def test_judge_4xx_not_retried(monkeypatch):
-    # 4xx（配额/参数错）重试无意义：立刻上抛
+def test_judge_429_is_retried(monkeypatch, caplog):
+    # 429 RESOURCE_EXHAUSTED 是瞬态限流（与 tts.py 配额退避对齐）：前 2 次 429、
+    # 第 3 次成功 → 正常出报告（故障定位 #1：旧实现把 429 当永久错误立即 failed）
+    fake = _patch(monkeypatch, _judged(_dims()))
+    calls = {"n": 0}
+    orig = fake.models.generate_content
+
+    def flaky(*, model, contents, config):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise errors.ClientError(
+                429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, None
+            )
+        return orig(model=model, contents=contents, config=config)
+
+    monkeypatch.setattr(fake.models, "generate_content", flaky)
+    monkeypatch.setattr(judge_run.time, "sleep", lambda s: None)
+
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert calls["n"] == 3
+    assert rep.overall_band == 6.5
+    assert "瞬态故障" in caplog.text
+
+
+def test_judge_network_error_is_retried(monkeypatch):
+    # httpx 网络/超时错误（代理抖动 / ReadTimeout）属瞬态：重试，不立即 failed（故障定位 #2）
+    import httpx
+
+    fake = _patch(monkeypatch, _judged(_dims()))
+    calls = {"n": 0}
+    orig = fake.models.generate_content
+
+    def flaky(*, model, contents, config):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadTimeout("read timed out")
+        return orig(model=model, contents=contents, config=config)
+
+    monkeypatch.setattr(fake.models, "generate_content", flaky)
+    monkeypatch.setattr(judge_run.time, "sleep", lambda s: None)
+
+    rep = judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)
+    assert calls["n"] == 2
+    assert rep.overall_band == 6.5
+
+
+def test_client_sets_request_timeout(monkeypatch):
+    # 故障定位 #3：genai.Client 必须带请求超时，上游挂起才会抛错→重试，不永久阻塞线程
+    monkeypatch.setattr(judge_run.settings, "gemini_api_key", "k")
+    monkeypatch.setattr(judge_run.settings, "judge_timeout_ms", 12345)
+    monkeypatch.setattr(judge_run.settings, "gemini_proxy", None)
+    judge_run._genai_client = None   # 复位单例（防前序用例污染）
+    captured = {}
+
+    def fake_client(*, api_key, http_options):
+        captured["http_options"] = http_options
+        return object()
+
+    monkeypatch.setattr(judge_run.genai, "Client", fake_client)
+    judge_run._client()
+    assert captured["http_options"].timeout == 12345
+    judge_run._genai_client = None   # 复位单例，避免污染其它用例
+
+
+def test_judge_non_429_4xx_not_retried(monkeypatch):
+    # 400 参数错 / 401-403 认证是永久错误：重试无意义，立刻上抛
     fake = _patch(monkeypatch, _judged(_dims()))
     calls = {"n": 0}
 
-    def quota_error(*, model, contents, config):
+    def bad_request(*, model, contents, config):
         calls["n"] += 1
         raise errors.ClientError(
-            429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, None
+            400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}}, None
         )
 
-    monkeypatch.setattr(fake.models, "generate_content", quota_error)
+    monkeypatch.setattr(fake.models, "generate_content", bad_request)
+    monkeypatch.setattr(judge_run.time, "sleep", lambda s: None)
 
     with pytest.raises(errors.ClientError):
         judge_run.run_judge(mode="ielts", transcript=TR, signals=SIG)

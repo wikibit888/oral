@@ -9,6 +9,13 @@
 // SQLite 单主键查（reports.py），此 QPS 无压力；更小则空轮询边际递增、收益不抵。
 export const POLL_INTERVAL_MS = 1200
 
+// 处理态轮询的墙钟上限：超过仍 processing 即判定「卡住」（上游挂死 / 进程重启掐断
+// 后台 finalize），停轮询、切 stalled 态给用户 Retry，而不是无限转圈（故障定位 #17）。
+// 取 180s：必须安全大于后端最坏重试总时长（judge_timeout_ms=30s × 约 5 次 ≈ 150s + 退避），
+// 否则会把"慢但仍在重试中"的合法路径误判 stalled。即便误判，后端 /retry 也对同一 session
+// 在途去重、不会 double-finalize（纵深防御）。正常报告 ≤5s，此上限只为兜底真·卡死。
+export const MAX_PROCESSING_MS = 180_000
+
 // status → 下一步动作：continue（继续轮询）/ done（切报告态）/ failed（终态文案）
 // / unknown（契约外，当错误展示，防后端新增状态时前端死轮询）。
 // 现行契约（SCHEMA §5.1，后端 PR #16 枚举迁移，2026-06-07 联调发现）：status ∈

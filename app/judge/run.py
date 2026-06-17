@@ -21,6 +21,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+import httpx
 from google import genai
 from google.genai import errors, types
 
@@ -48,9 +49,11 @@ MAX_PRONUNCIATION_CLIPS = 2
 
 AUDIO_MIME = "audio/wav"
 
-# judge 上游 5xx（联调多次实测 503 高负载）按此退避重试；temp=0 重试无副作用。
+# judge 上游瞬态故障退避重试序列；temp=0 重试无副作用。len 即重试次数，末位 None
+# 表示最后一次尝试后放弃。比旧 (2,5) 更长——单次故障即永久丢报告，多给几次吸收
+# 间歇性抖动（故障定位：failed 与 completed 同小时交错 = 间歇故障，非宕机）。
 # 每次退避叠加 [0, JUDGE_RETRY_JITTER_S) 随机抖动，避免并发重试同时撞上游（thundering herd）。
-JUDGE_RETRY_BACKOFF_S = (2, 5)
+JUDGE_RETRY_BACKOFF_S = (1, 2, 4, 8)
 JUDGE_RETRY_JITTER_S = 1.0
 
 _genai_client: genai.Client | None = None
@@ -61,46 +64,79 @@ def _client() -> genai.Client:
 
     代理走 http_options 传给底层 httpx，不污染进程 os.environ（W1）。
     GEMINI_PROXY=none/off 或留空即直连。
+    请求超时（judge_timeout_ms）一并下传：上游挂起不回包时按超时抛错→进重试，
+    不让底层 httpx 无限等待把 to_thread 线程永久阻塞、会话永久卡 processing。
     """
     global _genai_client
     if _genai_client is None:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY 未配置，无法调用 judge（检查 .env）。")
-        http_options: types.HttpOptions | None = None
+        client_args: dict = {}
         proxy = settings.gemini_proxy
         if proxy and proxy.strip().lower() not in ("none", "off", "0", ""):
-            http_options = types.HttpOptions(client_args={"proxy": proxy})
+            client_args["proxy"] = proxy
+        http_options = types.HttpOptions(
+            timeout=settings.judge_timeout_ms,
+            client_args=client_args or None,
+        )
         _genai_client = genai.Client(api_key=settings.gemini_api_key, http_options=http_options)
     return _genai_client
 
 
-def _generate_with_retry(contents: list) -> types.GenerateContentResponse:
-    """调一次 judge 生成；上游 5xx（ServerError）按退避序列重试后仍败则上抛。
+def _is_retryable(exc: Exception) -> bool:
+    """是否值得退避重试：瞬态故障（重试可能成功）才重试，永久错误立即放弃。
 
-    联调多次实测 judge 模型 503 高负载、稍候即通——不重试会把瞬态故障固化成
-    用户可见的 failed 报告。只重试 5xx：4xx（配额/参数）重试无意义；
-    temperature=0 + 结构化输出，重试不引入漂移。
+    - 5xx ServerError（高负载 / 上游临时不可用）：重试。
+    - 429 RESOURCE_EXHAUSTED（限流，ClientError）：重试——和 tts.py 的配额退避对齐。
+      其余 4xx（400 参数错 / 401-403 认证）是永久错误，重试无意义，立即放弃。
+    - httpx 瞬态网络/超时（ReadTimeout / ConnectError / 代理抖动 / 连接重置）：重试。
+    单用户 + 单 key + 常挂代理的本地 demo，这些恰是最高频的"单次失败即永久丢报告"来源。
     """
+    if isinstance(exc, errors.ServerError):
+        return True
+    if isinstance(exc, errors.ClientError):
+        return getattr(exc, "code", None) == 429
+    # httpx 传输层错误多为瞬态（超时 / 连接重置 / 代理抖动 / 服务端中途断流）——可重试；
+    # 但 UnsupportedProtocol / LocalProtocolError 是本端配置/构造错误（如代理 URL 写错），
+    # 永久性，重试纯属浪费退避，排除。
+    if isinstance(exc, (httpx.UnsupportedProtocol, httpx.LocalProtocolError)):
+        return False
+    return isinstance(exc, httpx.TransportError)
+
+
+def _generate_with_retry(contents: list) -> types.GenerateContentResponse:
+    """调一次 judge 生成；瞬态故障按退避序列重试，耗尽或遇永久错误则上抛。
+
+    可重试集合见 _is_retryable（5xx / 429 / httpx 网络超时）。不重试 400/401/403
+    （永久错误）。temperature=0 + 结构化输出，重试不引入漂移。
+    """
+    config = types.GenerateContentConfig(
+        temperature=0,
+        response_mime_type="application/json",
+        response_schema=JudgeReport,
+        # 关思考省课后首字延迟（可配置：0=关 / -1=自动 / 正值=固定档）。
+        thinking_config=types.ThinkingConfig(
+            thinking_budget=settings.judge_thinking_budget
+        ),
+        # 显式 token 上限仅在配置正值时下传；默认不设、用模型上限避免反而缩小留白。
+        max_output_tokens=(
+            settings.judge_max_output_tokens
+            if settings.judge_max_output_tokens > 0
+            else None
+        ),
+    )
     for backoff in (*JUDGE_RETRY_BACKOFF_S, None):
         try:
             return _client().models.generate_content(
                 model=settings.judge_model,
                 contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=0,
-                    response_mime_type="application/json",
-                    response_schema=JudgeReport,
-                    # 关思考省课后首字延迟（可配置：0=关 / -1=自动 / 正值=固定档）。
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=settings.judge_thinking_budget
-                    ),
-                ),
+                config=config,
             )
-        except errors.ServerError as e:
-            if backoff is None:
+        except Exception as e:
+            if backoff is None or not _is_retryable(e):
                 raise
             delay = backoff + random.uniform(0, JUDGE_RETRY_JITTER_S)
-            logger.warning("judge 上游 5xx，%.2fs 后重试：%r", delay, e)
+            logger.warning("judge 上游瞬态故障，%.2fs 后重试：%r", delay, e)
             time.sleep(delay)
 
 
@@ -129,15 +165,23 @@ def select_pronunciation_clips(
     return sorted(clips, key=lambda c: c.duration_s, reverse=True)[:max_n]
 
 
-def _clip_part(clip: AudioClip) -> types.Part:
+def _clip_part(clip: AudioClip) -> types.Part | None:
     """切片 → Gemini Part：优先 Files API URI（已预上传），否则 inline bytes。
 
     inline 回退一次性读整个文件——本地 demo 的切片是回合 / 单题级（秒到分钟），
     可接受；生产应改流式上传 / 强制走 Files API。
+    读盘失败（Give Up 竞态删文件 / 磁盘清理 / 路径丢失）降级返回 None 跳过该切片，
+    不让一段发音样本缺失把整份报告拖成 failed（故障定位 #F）——发音改由剩余切片 /
+    transcript 判，最差退化到"无切片"路径（仅 warning）。
     """
     if clip.file_uri:
         return types.Part.from_uri(file_uri=clip.file_uri, mime_type=AUDIO_MIME)
-    return types.Part.from_bytes(data=Path(clip.path).read_bytes(), mime_type=AUDIO_MIME)
+    try:
+        data = Path(clip.path).read_bytes()
+    except OSError:
+        logger.warning("judge 切片读盘失败，跳过该发音样本：%s", clip.path, exc_info=True)
+        return None
+    return types.Part.from_bytes(data=data, mime_type=AUDIO_MIME)
 
 
 def run_judge(
@@ -175,12 +219,13 @@ def run_judge(
     contents: list = [prompt]
     # 雅思才喂音频（声学判发音可懂度），且只喂最长的 2 段切片；情景只走文字诊断。
     if mode == "ielts":
-        if clips:
-            for clip in select_pronunciation_clips(clips):
-                contents.append(_clip_part(clip))
+        parts = [p for c in select_pronunciation_clips(clips or []) if (p := _clip_part(c))]
+        if parts:
+            contents.extend(parts)
         else:
             logger.warning(
-                "run_judge: IELTS 模式未提供音频切片，Pronunciation 仅依据 transcript（降质）。"
+                "run_judge: IELTS 模式无可用音频切片（未提供或全部读盘失败），"
+                "Pronunciation 仅依据 transcript（降质）。"
             )
 
     resp = _generate_with_retry(contents)
@@ -196,7 +241,12 @@ def run_judge(
         try:
             judged = JudgeReport.model_validate_json(raw)
         except Exception as exc:
-            raise RuntimeError(f"judge 响应解析失败；resp.text={raw[:200]!r}") from exc
+            # 带上 finish_reason 便于区分截断（MAX_TOKENS）/ 安全拦截（SAFETY/RECITATION）
+            # 与真·解析故障——同样上抛走 failed，但日志可观测、不再是无线索的解析错。
+            reason = _finish_reason(resp)
+            raise RuntimeError(
+                f"judge 响应解析失败（finish_reason={reason}）；resp.text={raw[:200]!r}"
+            ) from exc
 
     # —— 系统确定性组装：judge 输出 + 后端回填，LLM 碰不到这些字段 —— #
     report = Report(
@@ -255,6 +305,15 @@ def run_judge(
         report.diagnostics.summary = None
 
     return report
+
+
+def _finish_reason(resp: types.GenerateContentResponse) -> str:
+    """从响应里尽力取 candidates[0].finish_reason（截断 / 安全拦截诊断用）；取不到为 'unknown'。"""
+    try:
+        reason = resp.candidates[0].finish_reason
+        return getattr(reason, "name", None) or str(reason)
+    except (AttributeError, IndexError, TypeError):
+        return "unknown"
 
 
 def _diagnostics_empty(diag: Diagnostics) -> bool:

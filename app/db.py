@@ -4,6 +4,7 @@
 换结构只改该数据文件，不在代码里硬编码 DDL。
 """
 
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Iterator
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -60,6 +63,25 @@ def init_db() -> None:
             {"is_seed": "INTEGER NOT NULL DEFAULT 0"},
         )
         _migrate_status_enum_once(conn)
+        _sweep_orphaned_processing(conn)
+
+
+def _sweep_orphaned_processing(conn: sqlite3.Connection) -> None:
+    """启动自愈：把残留 processing 会话标 failed（故障定位 #4：reload / 崩溃后无人收口）。
+
+    finalize 是进程内后台 task：进程被 uvicorn 热重载 SIGTERM 掐断或崩溃时，task 随之
+    消失、状态停在 processing 永不收口，前端永久轮询转圈。**进程刚启动时一定没有在途
+    finalize**——故此刻任何 processing 行都必是上个进程遗留的孤儿，统一标 failed 给前端
+    一个终态（再由 POST /reports/{id}/retry 重跑恢复）。每次启动跑、幂等、不门控版本。
+    live / recording 是"用户没结束会话"的合法中间态，不在清扫范围。
+    """
+    cur = conn.execute(
+        "UPDATE sessions SET status='failed' WHERE status='processing'"
+    )
+    if cur.rowcount:
+        logger.warning(
+            "启动自愈：%d 个残留 processing 会话标记 failed（上次进程未收口）", cur.rowcount
+        )
 
 
 # 数据迁移版本（PRAGMA user_version）：每个一次性迁移占一个版本号，只升不降。

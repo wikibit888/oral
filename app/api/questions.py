@@ -28,6 +28,8 @@ SAMPLE_SIZE = {"p1": 5, "p2": 1, "p3": 5}
 # 以本文件位置锚定仓库根（app/api/ 上两级），不依赖进程 cwd（review W1）。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 QUESTIONS_PATH = _REPO_ROOT / "data" / "questions.json"
+# 回退精选库（§7 新库优先、精选回退）：主文件损坏/缺失时兜底，保 demo 不崩
+FALLBACK_PATH = _REPO_ROOT / "data" / "questions_fallback.json"
 TTS_DIR = _REPO_ROOT / "data" / "tts"
 TTS_URL_PREFIX = "/static/tts"
 
@@ -40,18 +42,113 @@ class Question(BaseModel):
     tts_url: str | None = None      # 预生成 TTS；未生成为 null（前端纯文字降级）
 
 
-@lru_cache(maxsize=1)
-def _load_bank() -> dict[str, list[dict]]:
-    """读静态题库并按 part 分组缓存（demo 静态数据，进程生命周期内不变）。
+class TopicGroup(BaseModel):
+    topic_id: str                   # 如 p1-t01 / s-p2-... 兜底为 fallback-*
+    title: str                      # 话题标题（前端选题分组标题）
+    questions: list[Question]       # 该话题下可勾选的题（p2 恰一张题卡）
 
-    part 字段在加载时注入每个条目（数据文件按组组织、条目内不重复存 part），
-    下游不再依赖调用方传入（review S2）。
+
+class TopicsResponse(BaseModel):
+    part: str                       # p1 | p2 | p3
+    topics: list[TopicGroup]        # 该 Part 全量题目，按 topic 分组
+
+
+@lru_cache(maxsize=1)
+def _load_raw() -> dict:
+    """读题库主文件；损坏/缺失则回退精选库（§7 新库优先、精选回退）。
+
+    返回原始 dict（季 schema 或旧精选 schema 二者之一），缓存于进程生命周期。
+    两库均不可读才抛——demo 至少要有题。
     """
-    raw = json.loads(QUESTIONS_PATH.read_text(encoding="utf-8"))
-    bank: dict[str, list[dict]] = {}
-    for part in VALID_PARTS:
-        bank[part] = [{**item, "part": part} for item in raw.get(part, [])]
-    return bank
+    for path in (QUESTIONS_PATH, FALLBACK_PATH):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+    raise RuntimeError("题库主文件与回退文件均不可读")
+
+
+def _is_season_schema(raw: dict) -> bool:
+    """季 schema 以 topic 分组（含 p2_3 捆绑）；旧精选 schema 是扁平 p1/p2/p3 列表。"""
+    return "p2_3" in raw
+
+
+def _load_bank() -> dict[str, list[dict]]:
+    """按 part 分组的扁平题库（向后兼容：GET /questions 抽样、_pick_cue_card、TTS 预生成）。
+
+    季 schema 在此摊平（p1 话题展开成题、p2_3 拆出题卡与 part3）；旧精选 schema
+    直接注入 part。part 字段加载时注入每条，下游不依赖调用方传入（review S2）。
+    """
+    raw = _load_raw()
+    if _is_season_schema(raw):
+        return {
+            "p1": [{**q, "part": "p1"} for t in raw["p1"] for q in t["questions"]],
+            "p2": [{**t["cue_card"], "part": "p2"} for t in raw["p2_3"]],
+            "p3": [{**q, "part": "p3"} for t in raw["p2_3"] for q in t["part3"]],
+        }
+    return {part: [{**item, "part": part} for item in raw.get(part, [])] for part in VALID_PARTS}
+
+
+def load_topics(part: str) -> list[dict]:
+    """选题 UI（方式 B / F1）用：该 Part 的 topic 列表，每 topic 含可勾选 questions。
+
+    p1：topic → 多个小问题；p2：topic → [题卡（含 bullets）]；p3：topic → part3 追问。
+    回退精选库无 topic 信息时，合成单一兜底 topic，保选题页不空白。
+    """
+    raw = _load_raw()
+    if _is_season_schema(raw):
+        if part == "p1":
+            return [
+                {"topic_id": t["topic_id"], "title": t["title"], "questions": t["questions"]}
+                for t in raw["p1"]
+            ]
+        if part == "p2":
+            return [
+                {"topic_id": t["topic_id"], "title": t["title"], "questions": [t["cue_card"]]}
+                for t in raw["p2_3"]
+            ]
+        if part == "p3":
+            return [
+                {"topic_id": t["topic_id"], "title": t["title"], "questions": t["part3"]}
+                for t in raw["p2_3"]
+                if t["part3"]
+            ]
+        return []
+    items = _load_bank().get(part, [])
+    return [{"topic_id": f"fallback-{part}", "title": f"Part {part[-1]}", "questions": items}] if items else []
+
+
+def load_exam_pools() -> dict:
+    """方式 A 模拟考（F2）抽题用：P1 话题池 + P2/3 捆绑池（题卡 + 其 part3 追问）。
+
+    P2↔P3 以 topic 为单位天然捆绑——抽一个 p2_3 topic 即得题卡 + 同话题追问，
+    满足"P3 基于 P2 话题延伸"。回退精选库无关联时 part3 为空（考官即兴）。
+    """
+    raw = _load_raw()
+    if _is_season_schema(raw):
+        return {
+            "p1_topics": [
+                {"topic_id": t["topic_id"], "title": t["title"], "questions": t["questions"]}
+                for t in raw["p1"]
+            ],
+            "p23_topics": [
+                {
+                    "topic_id": t["topic_id"],
+                    "title": t["title"],
+                    "cue_card": t["cue_card"],
+                    "part3": t["part3"],
+                }
+                for t in raw["p2_3"]
+            ],
+        }
+    bank = _load_bank()
+    return {
+        "p1_topics": [{"topic_id": "fallback-p1", "title": "Part 1", "questions": bank.get("p1", [])}],
+        "p23_topics": [
+            {"topic_id": f"fallback-{c['id']}", "title": c["text"], "cue_card": c, "part3": []}
+            for c in bank.get("p2", [])
+        ],
+    }
 
 
 def _tts_url(question_id: str) -> str | None:
@@ -87,3 +184,39 @@ async def list_questions(
         )
         for item in sampled
     ]
+
+
+@router.get("/questions/topics", response_model=TopicsResponse)
+async def list_topics(
+    part: str | None = Query(default=None, description="题目所属 Part：p1 | p2 | p3"),
+) -> TopicsResponse:
+    """选题 UI（方式 B / F1）：返回该 Part **全量**题目，按 topic 分组供用户勾选。
+
+    分组逻辑复用 load_topics（不在此重复）；每题经 Question 模型构造、tts_url 实时回填。
+    p2 题卡带 bullets，p1/p3 的 bullets 为 null。缺参与非法值统一走中文 422。
+    """
+    # 缺参与非法值统一走中文 422（与 GET /questions 文案一致，review W5）
+    if part not in VALID_PARTS:
+        raise HTTPException(
+            status_code=422, detail=f"part 必须是 {sorted(VALID_PARTS)} 之一"
+        )
+    return TopicsResponse(
+        part=part,
+        topics=[
+            TopicGroup(
+                topic_id=topic["topic_id"],
+                title=topic["title"],
+                questions=[
+                    Question(
+                        id=q["id"],
+                        part=part,
+                        text=q["text"],
+                        bullets=q.get("bullets"),
+                        tts_url=_tts_url(q["id"]),
+                    )
+                    for q in topic["questions"]
+                ],
+            )
+            for topic in load_topics(part)
+        ],
+    )

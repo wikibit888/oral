@@ -44,7 +44,8 @@ TODO.md
 TODO.frontend.md
 gemini_live.py
 .claude/
-
+deepdive.md
+.worktreeinclude
 # SQLite 本地 demo 数据库
 *.db
 *.db-journal

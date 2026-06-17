@@ -54,13 +54,72 @@ export function parseEvent(data) {
 }
 
 // transcript_delta 合并：同 role 连续增量并入同一气泡，role 切换开新气泡
-// （双人转写流，FRONTEND.md §2 会话页）
+// （双人转写流，FRONTEND.md §2 会话页）。合并时 spread 旧气泡——保住 attachCoachCard
+// 挂上的 cards 不被后续同轮增量覆盖（教练卡片可能在用户转写未收尾时先到）。
 export function appendDelta(list, { role, text }) {
   const last = list[list.length - 1]
   if (last && last.role === role) {
-    return [...list.slice(0, -1), { role, text: last.text + text }]
+    return [...list.slice(0, -1), { ...last, role, text: last.text + text }]
   }
   return [...list, { role, text }]
+}
+
+// 会话内教练卡片（仅 scenario）：teaching（中文求助）/ correction（语法纠错）下行
+// 事件 → 卡片数据；非教练事件返回 null。teaching 的 kind = mixed_cn |
+// full_sentence_cn | explicit_ask（措辞「你问/你说」据此切换）；correction 的
+// spoken 标记该错是否已在对话中口头纠正（false = 卡片是唯一呈现处）。
+export function coachCardFromEvent(ev) {
+  if (!ev) return null
+  if (ev.type === 'teaching') {
+    return {
+      variant: 'teaching',
+      kind: ev.kind ?? null,
+      chinese: ev.chinese ?? '',
+      english: ev.english ?? '',
+      example: ev.example ?? '',
+    }
+  }
+  if (ev.type === 'correction') {
+    return {
+      variant: 'correction',
+      original: ev.original ?? '',
+      fixed: ev.fixed ?? '',
+      note: ev.note ?? '',
+      spoken: ev.spoken === true,
+    }
+  }
+  return null
+}
+
+// 折叠态速览（用户决策 2026-06-17「短语速览」）：teaching=「中文 → 英文」、
+// correction=「错 → 对」。任一端缺失则降级只显存在的一端。
+export function coachCardPreview(card) {
+  if (!card) return ''
+  const [a, b] =
+    card.variant === 'teaching'
+      ? [card.chinese, card.english]
+      : [card.original, card.fixed]
+  if (a && b) return `${a} → ${b}`
+  return a || b || ''
+}
+
+// 把教练卡片挂到最近一条 You 气泡的 cards 上——**不新增数组项**，以保住
+// dialogAudio 逐轮回放的下标对齐（transcript[i] ↔ dialogAudio[i]，本文件 §回放）。
+// 无 user 气泡（理论上求助/纠错必在用户开口之后）→ 原样返回（丢弃，不臆造气泡）。
+export function attachCoachCard(transcript, card) {
+  if (!card) return transcript
+  let idx = -1
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    if (transcript[i].role === 'user') {
+      idx = i
+      break
+    }
+  }
+  if (idx === -1) return transcript
+  const b = transcript[idx]
+  const next = transcript.slice()
+  next[idx] = { ...b, cards: [...(b.cards ?? []), card] }
+  return next
 }
 
 // 方式 A 导演 part_change（handoff 005 / IELTS.md §2，009 终版模型驱动：

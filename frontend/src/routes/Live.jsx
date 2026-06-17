@@ -1,15 +1,18 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { scenarioLabel } from '../lib/modes.js'
 import { PcmRecorder } from '../lib/audio/recorder.js'
 import { PcmPlayer } from '../lib/audio/player.js'
 import { rmsLevel16 } from '../lib/audio/level.js'
 import VoiceWave from '../components/VoiceWave.jsx'
+import CoachCard from '../components/CoachCard.jsx'
 import {
   PART_STAGES,
   aiRoleLabel,
   appendDelta,
+  attachCoachCard,
   buildLiveUrl,
+  coachCardFromEvent,
   createFrameBatcher,
   formatLatency,
   normalizeTurn,
@@ -296,11 +299,21 @@ export default function Live() {
         case 'start_prep_timer':
           if (typeof ev.seconds === 'number') setPrepLeft(ev.seconds)
           break
-        case 'teaching':
-          // 求助卡片 UI 是 handoff 010（待做）；011 先消费其「用户在求助」语义：
-          // 全量重置沉默探询（仅 scenario 会收到）
+        case 'teaching': {
+          // 中文求助（仅 scenario）：①重置沉默探询（用户在开口求助）
+          // ②挂教练卡片到最近 You 气泡下方（默认折叠，handoff 010 卡片 UI 落地）
           nudge?.teaching()
+          const card = coachCardFromEvent(ev)
+          if (card) setTranscript((t) => attachCoachCard(t, card))
           break
+        }
+        case 'correction': {
+          // 语法纠错（仅 scenario）：挂卡片到最近 You 气泡——沉默探询已由用户
+          // 实际说话（mic 电平）重置，无需再动 nudge
+          const card = coachCardFromEvent(ev)
+          if (card) setTranscript((t) => attachCoachCard(t, card))
+          break
+        }
         case 'error':
           fail(ev.message ?? '实时会话出错。') // 后端中文文案直出（handoff 001）
           break
@@ -603,28 +616,34 @@ export default function Live() {
             {inlineCue}
             {transcript.length === 0 && <p className="muted">{hint}</p>}
             {transcript.map((b, i) => (
-              <div
-                key={i}
-                className={`${BUBBLE_BASE} ${
-                  b.role === 'user'
-                    ? 'self-end border-accent-line bg-accent-soft'
-                    : 'self-start border-line bg-white'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className={BUBBLE_ROLE}>{b.role === 'user' ? 'You' : aiLabel}</span>
-                  {dialogAudio[i]?.role === b.role && dialogAudio[i]?.url && (
-                    <button
-                      type="button"
-                      className={PLAY_BTN}
-                      onClick={() => playTurn(i, dialogAudio[i].url)}
-                    >
-                      {playingIdx === i ? 'Pause' : 'Play'}
-                    </button>
-                  )}
+              <Fragment key={i}>
+                <div
+                  className={`${BUBBLE_BASE} ${
+                    b.role === 'user'
+                      ? 'self-end border-accent-line bg-accent-soft'
+                      : 'self-start border-line bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className={BUBBLE_ROLE}>{b.role === 'user' ? 'You' : aiLabel}</span>
+                    {dialogAudio[i]?.role === b.role && dialogAudio[i]?.url && (
+                      <button
+                        type="button"
+                        className={PLAY_BTN}
+                        onClick={() => playTurn(i, dialogAudio[i].url)}
+                      >
+                        {playingIdx === i ? 'Pause' : 'Play'}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mb-0 mt-1">{b.text}</p>
                 </div>
-                <p className="mb-0 mt-1">{b.text}</p>
-              </div>
+                {/* 会话内教练卡片：中文求助 / 语法纠错，静默挂 You 气泡下，默认折叠。
+                    卡片只挂 user 气泡（attachCoachCard 保证）——render 处再加一道 role
+                    守卫，把「卡片 = self-end 右对齐」的不变式显式锚定在本地，绝不挂 AI 侧 */}
+                {b.role === 'user' &&
+                  b.cards?.map((c, j) => <CoachCard key={j} card={c} />)}
+              </Fragment>
             ))}
             {examinerSpeaking && (
               <p className="m-0 flex items-center gap-2 font-sans text-[13px] leading-none text-ink">

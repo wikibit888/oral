@@ -3,7 +3,10 @@ import {
   PART_STAGES,
   aiRoleLabel,
   appendDelta,
+  attachCoachCard,
   buildLiveUrl,
+  coachCardFromEvent,
+  coachCardPreview,
   createFrameBatcher,
   formatLatency,
   normalizeTurn,
@@ -180,6 +183,12 @@ describe('appendDelta（双人转写流合并）', () => {
     t = appendDelta(t, { role: 'user', text: 'Yes' })
     expect(t.map((b) => b.role)).toEqual(['user', 'examiner', 'user'])
   })
+
+  it('同轮合并保留气泡上已挂的 cards（教练卡片不被后续增量覆盖）', () => {
+    let t = [{ role: 'user', text: 'Hel', cards: [{ variant: 'teaching' }] }]
+    t = appendDelta(t, { role: 'user', text: 'lo' })
+    expect(t).toEqual([{ role: 'user', text: 'Hello', cards: [{ variant: 'teaching' }] }])
+  })
 })
 
 describe('createFrameBatcher（上行合批）', () => {
@@ -214,5 +223,121 @@ describe('createFrameBatcher（上行合批）', () => {
     b.flush()                         // End 路径：排空尾包（review W1 的依赖行为）
     expect(sent.length).toBe(2)
     expect([...sent[1]]).toEqual([4, 5])
+  })
+})
+
+describe('coachCardFromEvent（会话内教练事件 → 卡片数据）', () => {
+  it('teaching 事件 → teaching 卡片（kind + 中/英/例句）', () => {
+    const card = coachCardFromEvent({
+      type: 'teaching',
+      kind: 'explicit_ask',
+      chinese: '上线',
+      english: 'go live',
+      example: 'We plan to go live next Friday.',
+    })
+    expect(card).toEqual({
+      variant: 'teaching',
+      kind: 'explicit_ask',
+      chinese: '上线',
+      english: 'go live',
+      example: 'We plan to go live next Friday.',
+    })
+  })
+
+  it('correction 事件 → correction 卡片（错/对/类型 + spoken 布尔）', () => {
+    const card = coachCardFromEvent({
+      type: 'correction',
+      original: 'We was blocked',
+      fixed: 'We were blocked',
+      note: 'subject-verb agreement',
+      spoken: true,
+    })
+    expect(card).toEqual({
+      variant: 'correction',
+      original: 'We was blocked',
+      fixed: 'We were blocked',
+      note: 'subject-verb agreement',
+      spoken: true,
+    })
+  })
+
+  it('缺字段降级空串 / spoken 缺省 false；非 true 不当真', () => {
+    expect(coachCardFromEvent({ type: 'teaching' })).toEqual({
+      variant: 'teaching',
+      kind: null,
+      chinese: '',
+      english: '',
+      example: '',
+    })
+    expect(coachCardFromEvent({ type: 'correction', spoken: 'yes' }).spoken).toBe(false)
+  })
+
+  it('非教练事件 / 空 → null', () => {
+    expect(coachCardFromEvent({ type: 'transcript_delta', role: 'user', text: 'hi' })).toBeNull()
+    expect(coachCardFromEvent(null)).toBeNull()
+  })
+})
+
+describe('coachCardPreview（折叠态速览 = 短语对照）', () => {
+  it('teaching 显「中文 → 英文」；correction 显「错 → 对」', () => {
+    expect(coachCardPreview({ variant: 'teaching', chinese: '上线', english: 'go live' })).toBe(
+      '上线 → go live',
+    )
+    expect(
+      coachCardPreview({ variant: 'correction', original: 'was', fixed: 'were' }),
+    ).toBe('was → were')
+  })
+
+  it('任一端缺失只显存在的一端；空卡 → 空串', () => {
+    expect(coachCardPreview({ variant: 'teaching', chinese: '上线', english: '' })).toBe('上线')
+    expect(coachCardPreview({ variant: 'correction', original: '', fixed: 'were' })).toBe('were')
+    expect(coachCardPreview(null)).toBe('')
+  })
+})
+
+describe('attachCoachCard（挂卡片到最近 You 气泡，不破回放下标对齐）', () => {
+  const card = { variant: 'teaching', chinese: '上线', english: 'go live' }
+
+  it('挂到最近一条 user 气泡，且不新增数组项', () => {
+    const t = [{ role: 'user', text: 'Hello' }]
+    const next = attachCoachCard(t, card)
+    expect(next).toHaveLength(1)
+    expect(next[0].cards).toEqual([card])
+  })
+
+  it('考官气泡在后时仍挂到最近的 user 气泡（不挂到考官）', () => {
+    const t = [
+      { role: 'user', text: 'A' },
+      { role: 'examiner', text: 'B' },
+    ]
+    const next = attachCoachCard(t, card)
+    expect(next[0].cards).toEqual([card])
+    expect(next[1].cards).toBeUndefined()
+  })
+
+  it('多次挂载累积同一气泡（中文求助 + 语法纠错可共存）', () => {
+    const c2 = { variant: 'correction', original: 'was', fixed: 'were' }
+    let t = [{ role: 'user', text: 'Hi' }]
+    t = attachCoachCard(t, card)
+    t = attachCoachCard(t, c2)
+    expect(t[0].cards).toEqual([card, c2])
+  })
+
+  it('空 transcript / 极早到的卡片 → 原样返回，不臆造气泡', () => {
+    expect(attachCoachCard([], card)).toEqual([])
+  })
+
+  it('无 user 气泡 / 空卡 → 原样返回，不臆造气泡', () => {
+    const t = [{ role: 'examiner', text: 'B' }]
+    expect(attachCoachCard(t, card)).toBe(t)
+    expect(attachCoachCard([{ role: 'user', text: 'A' }], null)).toEqual([
+      { role: 'user', text: 'A' },
+    ])
+  })
+
+  it('不就地改原数组（返回新引用）', () => {
+    const t = [{ role: 'user', text: 'A' }]
+    attachCoachCard(t, card)
+    expect(t[0].cards).toBeUndefined()
   })
 })
